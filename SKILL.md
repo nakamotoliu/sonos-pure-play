@@ -10,6 +10,18 @@ description: |-
 This skill is intentionally contract-driven.
 It is designed to reduce agent improvisation.
 
+## 0. Execution baseline (must-read)
+
+This skill runs in **gateway-auth + OpenClaw browser** mode.
+
+Mandatory setup for all agents:
+1. `OPENCLAW_GATEWAY_TOKEN` must be present
+2. `OPENCLAW_GATEWAY_URL` defaults to `http://127.0.0.1:18789` when unset (local-only default; set explicitly for remote gateway)
+3. `gateway.http.endpoints.chatCompletions.enabled` must be `true`
+4. Browser path is OpenClaw-managed browser tooling (no Browser Relay dependency)
+
+Do not treat `PAGE_AGENT_API_KEY` as a primary credential in this skill.
+
 ## 1. Two modes only
 
 ### A. MEDIA_FLOW
@@ -35,11 +47,13 @@ This mode may use Sonos CLI only.
 
 ## 2. Hard dependency schema
 For MEDIA_FLOW, all of the following are required:
-1. OpenClaw browser runtime
-2. PageController capability
-3. Sonos Web App logged in under the configured browser profile
-4. Sonos CLI working locally
-5. CLI verification after browser-side action
+1. OpenClaw browser runtime (profile `openclaw`)
+2. PageController capability in browser page context
+3. Sonos Web App logged in under the OpenClaw browser profile
+4. Gateway auth env (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_URL`)
+5. `gateway.http.endpoints.chatCompletions.enabled=true`
+6. Sonos CLI working locally
+7. CLI verification after browser-side action
 
 If any of these are missing, do not claim the request is fully supported.
 
@@ -167,6 +181,11 @@ PageController is used for:
 4. detail-page confirmation
 5. `更多选项` menu entry targeting
 6. playback-action selection before CLI verification
+
+Critical boundary:
+- PageController is **browser-context only**.
+- Plain Node runtime (without page context) is unsupported for MEDIA_FLOW.
+- Do not claim MEDIA_FLOW success from Node logs alone.
 
 Required upstream usage reference:
 - https://alibaba.github.io/page-agent/docs/advanced/page-controller

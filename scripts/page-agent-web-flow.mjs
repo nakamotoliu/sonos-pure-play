@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import process from 'node:process';
-import { PageAgent } from 'page-agent';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const query = process.argv[2];
 const room = process.argv[3] || '客厅 play5';
@@ -11,14 +13,66 @@ if (!query) {
   process.exit(2);
 }
 
-const apiKey = process.env.PAGE_AGENT_API_KEY;
+function resolveGatewayToken() {
+  if (process.env.OPENCLAW_GATEWAY_TOKEN) return process.env.OPENCLAW_GATEWAY_TOKEN;
+  try {
+    const cfgPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+    const raw = fs.readFileSync(cfgPath, 'utf8');
+    const cfg = JSON.parse(raw);
+    const token = cfg?.gateway?.auth?.token;
+    if (typeof token === 'string' && token.trim()) return token.trim();
+  } catch {}
+  return '';
+}
+
+const apiKey = resolveGatewayToken();
 if (!apiKey) {
-  console.error('Missing PAGE_AGENT_API_KEY');
+  console.error('Missing gateway token (set OPENCLAW_GATEWAY_TOKEN or configure gateway.auth.token in ~/.openclaw/openclaw.json)');
+  process.exit(2);
+}
+
+const hasBrowserPageController =
+  typeof globalThis.window !== 'undefined' &&
+  typeof globalThis.document !== 'undefined';
+
+if (!hasBrowserPageController) {
+  console.error(JSON.stringify({
+    ok: false,
+    step: 'bootstrap',
+    error: 'PageController requires a browser page context; plain Node runtime is unsupported.',
+    hint: 'Run this flow from an OpenClaw/browser-hosted page runtime instead of direct node execution.'
+  }, null, 2));
+  process.exit(2);
+}
+
+let PageAgent;
+try {
+  const mod = await import('page-agent');
+  PageAgent = mod?.PageAgent;
+} catch (err) {
+  console.error(JSON.stringify({
+    ok: false,
+    step: 'bootstrap',
+    code: 'PAGE_AGENT_IMPORT_FAILED',
+    error: String(err?.message || err),
+    hint: 'Install/resolve page-agent in the execution runtime before MEDIA_FLOW.'
+  }, null, 2));
+  process.exit(2);
+}
+
+if (typeof PageAgent !== 'function') {
+  console.error(JSON.stringify({
+    ok: false,
+    step: 'bootstrap',
+    code: 'PAGE_AGENT_INVALID_EXPORT',
+    error: 'page-agent loaded but PageAgent export is missing/invalid.'
+  }, null, 2));
   process.exit(2);
 }
 
 const model = process.env.PAGE_AGENT_MODEL || 'qwen3.5-plus';
-const baseURL = process.env.PAGE_AGENT_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || 'http://127.0.0.1:18789';
+const baseURL = `${String(gatewayUrl).replace(/\/$/, '')}/v1`;
 
 const agent = new PageAgent({ model, baseURL, apiKey, language: 'zh-CN' });
 

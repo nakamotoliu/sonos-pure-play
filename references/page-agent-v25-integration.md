@@ -8,11 +8,21 @@ Use Page-Agent for all Sonos Web App interaction steps while preserving CLI as t
 - Verification: Sonos CLI only
 - Fallbacks: none (fail fast with reason)
 
-## Required Environment
-- `PAGE_AGENT_API_KEY`
-- Optional:
-  - `PAGE_AGENT_MODEL` (default: `qwen3.5-plus`)
-  - `PAGE_AGENT_BASE_URL` (default: `https://dashscope.aliyuncs.com/compatible-mode/v1`)
+## Required Environment (gateway-auth mode)
+- Gateway token source (one of):
+  - `OPENCLAW_GATEWAY_TOKEN` (preferred)
+  - `~/.openclaw/openclaw.json` -> `gateway.auth.token` (auto fallback)
+- `OPENCLAW_GATEWAY_URL` (optional, default: `http://127.0.0.1:18789`)
+  - Note: default is local-only; remote gateway deployments must set this explicitly.
+
+Derived at runtime:
+- `baseURL = OPENCLAW_GATEWAY_URL + /v1`
+
+Optional:
+- `PAGE_AGENT_MODEL` (default: `qwen3.5-plus`)
+
+Legacy note:
+- `PAGE_AGENT_API_KEY` / `PAGE_AGENT_BASE_URL` are no longer primary inputs in this skill.
 
 ## Menu Decision Rule
 Priority order:

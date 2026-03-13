@@ -6,6 +6,12 @@ This SOP implements the schema in `SKILL.md`.
 ### MEDIA_FLOW
 Use only when PageController is available.
 
+Preflight (required):
+- `OPENCLAW_GATEWAY_TOKEN` exists
+- `OPENCLAW_GATEWAY_URL` exists or uses default `http://127.0.0.1:18789`
+- Gateway endpoint `chatCompletions` is enabled
+- Browser is OpenClaw-managed (no Browser Relay required)
+
 ### CONTROL_ONLY
 Use CLI only.
 
