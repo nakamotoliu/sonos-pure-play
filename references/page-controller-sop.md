@@ -9,6 +9,7 @@ Use only when PageController is available.
 Preflight (required):
 - `OPENCLAW_GATEWAY_TOKEN` exists
 - `OPENCLAW_GATEWAY_URL` exists or uses default `http://127.0.0.1:18789`
+- `PAGE_AGENT_MODEL` is explicitly set
 - Gateway endpoint `chatCompletions` is enabled
 - Browser is OpenClaw-managed (no Browser Relay required)
 

@@ -70,7 +70,12 @@ if (typeof PageAgent !== 'function') {
   process.exit(2);
 }
 
-const model = process.env.PAGE_AGENT_MODEL || 'qwen3.5-plus';
+const model = process.env.PAGE_AGENT_MODEL;
+if (!model || !String(model).trim()) {
+  console.error('Missing PAGE_AGENT_MODEL (required; no silent default).');
+  process.exit(2);
+}
+
 const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || 'http://127.0.0.1:18789';
 const baseURL = `${String(gatewayUrl).replace(/\/$/, '')}/v1`;
 

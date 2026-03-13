@@ -17,8 +17,9 @@ This skill runs in **gateway-auth + OpenClaw browser** mode.
 Mandatory setup for all agents:
 1. `OPENCLAW_GATEWAY_TOKEN` must be present
 2. `OPENCLAW_GATEWAY_URL` defaults to `http://127.0.0.1:18789` when unset (local-only default; set explicitly for remote gateway)
-3. `gateway.http.endpoints.chatCompletions.enabled` must be `true`
-4. Browser path is OpenClaw-managed browser tooling (no Browser Relay dependency)
+3. `PAGE_AGENT_MODEL` must be explicitly set (no silent model fallback)
+4. `gateway.http.endpoints.chatCompletions.enabled` must be `true`
+5. Browser path is OpenClaw-managed browser tooling (no Browser Relay dependency)
 
 Do not treat `PAGE_AGENT_API_KEY` as a primary credential in this skill.
 

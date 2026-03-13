@@ -18,8 +18,8 @@ Use Page-Agent for all Sonos Web App interaction steps while preserving CLI as t
 Derived at runtime:
 - `baseURL = OPENCLAW_GATEWAY_URL + /v1`
 
-Optional:
-- `PAGE_AGENT_MODEL` (default: `qwen3.5-plus`)
+Required:
+- `PAGE_AGENT_MODEL` (must be explicitly set by runtime/agent, e.g. `qwen3.5-plus`)
 
 Legacy note:
 - `PAGE_AGENT_API_KEY` / `PAGE_AGENT_BASE_URL` are no longer primary inputs in this skill.

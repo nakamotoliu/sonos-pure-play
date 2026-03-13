@@ -47,6 +47,12 @@ if (process.env.OPENCLAW_GATEWAY_URL) {
   console.log('[4b] OPENCLAW_GATEWAY_URL: not set (will default to http://127.0.0.1:18789)');
 }
 
+if (process.env.PAGE_AGENT_MODEL) {
+  console.log('[4c] PAGE_AGENT_MODEL: present');
+} else {
+  console.warn('[4c] WARNING: PAGE_AGENT_MODEL missing; MEDIA_FLOW web execution should fail fast.');
+}
+
 if (typeof globalThis.window !== 'undefined' && typeof globalThis.document !== 'undefined') {
   console.log('[5] Browser page context: present');
 } else {
