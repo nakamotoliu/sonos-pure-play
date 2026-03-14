@@ -1,4 +1,4 @@
-# Sonos Direct Control (OpenClaw Skill)
+it is not working# Sonos Direct Control (OpenClaw Skill)
 
 Version: 3.0.0 (Schema-First)
 
