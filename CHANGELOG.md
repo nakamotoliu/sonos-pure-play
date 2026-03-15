@@ -2,6 +2,18 @@
 
 All notable changes to `sonos-pure-play` should be recorded here.
 
+## 0.2.1 - 2026-03-15
+
+### Fixed
+- Completed the exported anti-repeat flow by including `scripts/playback-memory.mjs` in the publish repo.
+- Updated exported `scripts/run.mjs` so playback history is loaded before selection and written only after CLI verification succeeds.
+- Corrected README coverage so semantic intent decomposition and anti-repeat playback history are explicitly documented.
+- Corrected release hygiene: this patch release exists because published content changed and therefore required a version bump.
+
+### Verified
+- Export completeness review now passes: documented anti-repeat capability is present in exported code and entry wiring.
+- `node --check` passes for exported `scripts/run.mjs`, `scripts/playback-memory.mjs`, and `scripts/candidate-ranker.mjs`.
+
 ## 0.2.0 - 2026-03-15
 
 ### Added

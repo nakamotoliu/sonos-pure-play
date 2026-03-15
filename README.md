@@ -12,7 +12,7 @@ This skill is designed for **room-targeted media playback** such as:
 
 ## Status
 
-- **Current version:** `0.2.0`
+- **Current version:** `0.2.1`
 - **Delivery state:** stable enough for guided use, but not yet a zero-config public release
 - **This iteration focus:** stronger long-intent recall, expanded-result selection, detail/direct-play branching, and verified playback-history writeback
 
@@ -28,7 +28,7 @@ Known limitations:
 - Sonos Web UI can still behave inconsistently depending on account/service state
 - final verification is intentionally conservative and may report failure in edge cases where Sonos changed too subtly
 
-## What changed in 0.2.0
+## What changed in 0.2.1
 
 ### Functional changes
 - Added short-intent/recall query expansion in `scripts/query-planner.mjs`.
