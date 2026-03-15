@@ -9,12 +9,16 @@ All notable changes to `sonos-pure-play` should be recorded here.
 - Added playback-history writeback after verified success so future ranking can penalize recently played content.
 - Added `view all` / `show more` expansion flow for broader candidate recall on Sonos Web.
 - Added zone-aware extraction to distinguish search results from system controls and now-playing UI.
+- Added playback-history persistence and pre-selection penalty flow so repeated content can be de-prioritized before the next selection.
 
 ### Changed
 - Upgraded search-result engagement from a single linear click path to a state machine that can try `open-detail`, `expand`, and `direct-play` paths.
 - Strengthened detail-page detection to use multiple signals instead of trusting a single `更多选项` button.
 - Improved query planning for short intents by generating additional recall candidates and intent-profile metadata.
 - Improved candidate title derivation from button label + local scope text instead of trusting generic `播放` labels.
+
+### Integration correction
+- Export repo now includes `scripts/playback-memory.mjs` and the updated `scripts/run.mjs` wiring so the documented anti-repeat flow is actually present in the published package.
 
 ### Verified
 - Real E2E run succeeded for a mood-style request equivalent to "play happy weekend folk in the living room, volume 0".

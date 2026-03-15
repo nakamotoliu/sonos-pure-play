@@ -36,6 +36,17 @@ Known limitations:
 - Added expanded-result (`查看所有` / `查看更多`) selection support in `scripts/web-flow.mjs`.
 - Added zone-aware filtering so system controls and now-playing UI are less likely to pollute candidate extraction.
 - Reworked result engagement into a state machine that can try detail-open, expand, and direct-play paths.
+- Added playback-history persistence and pre-selection penalty flow so recently played content can be down-ranked before the next pick.
+
+### Semantic intent decomposition
+- The skill does not search only with the raw request text.
+- It first cleans the original media intent, derives `originalIntent`, `requestKind`, priority terms, and multiple recall queries.
+- Short or fuzzy prompts can produce compressed / expanded recall candidates for broader retrieval, while the original intent is still reused during ranking.
+
+### Anti-repeat playback history
+- Playback history is loaded before candidate selection.
+- Candidate ranking applies history penalty scoring to reduce repeated hits for recently played content.
+- History is written only after CLI verification succeeds, so failed or ambiguous runs do not pollute memory.
 
 ### Validation evidence
 - Real Sonos E2E playback succeeded for a mood-style request with a post-play `volume=0` control step.

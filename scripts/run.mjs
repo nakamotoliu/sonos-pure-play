@@ -12,6 +12,7 @@ import {
 } from './cli-control.mjs';
 import { PurePlayBrowserRunner } from './browser-runner.mjs';
 import { SkillError } from './normalize.mjs';
+import { loadPlaybackHistory, recordSuccessfulPlayback } from './playback-memory.mjs';
 import { buildQueryPlan } from './query-planner.mjs';
 import { SONOS_URL } from './selectors.mjs';
 import { runMediaFlow } from './web-flow.mjs';
@@ -91,7 +92,14 @@ async function main() {
   }
 
   const queryPlan = buildQueryPlan({ request: intent.mediaRequest || intent.request });
-  emit({ ok: true, phase: 'query-plan', intent: queryPlan.intent, queries: queryPlan.queries });
+  emit({
+    ok: true,
+    phase: 'query-plan',
+    intent: queryPlan.intent,
+    originalIntent: queryPlan.originalIntent,
+    requestKind: queryPlan.requestKind,
+    queries: queryPlan.queries,
+  });
 
   const preStatus = getStatus(room);
   const preQueue = getQueue(room);
@@ -112,12 +120,15 @@ async function main() {
     baseUrl: SONOS_URL,
   });
   emit({ ok: true, phase: 'mcp-profile', browserProfile });
+  const playbackHistory = loadPlaybackHistory();
+  emit({ ok: true, phase: 'playback-history', count: playbackHistory.length });
 
   const webResult = runMediaFlow({
     runner,
     queryPlan,
     room,
     actionPreference: intent.actionPreference,
+    playbackHistory,
     log: emit,
   });
   emit({ ok: true, phase: 'web-flow', room, ...webResult });
@@ -155,6 +166,24 @@ async function main() {
     phase: 'verify-cli',
     room,
     verification,
+  });
+
+  const historyEntry = recordSuccessfulPlayback({
+    room,
+    originalIntent: queryPlan.originalIntent,
+    queryUsed: webResult.query,
+    selectedTitle: webResult.selectedContent,
+    selectedType: webResult.selectedType || 'unknown',
+    actionName: webResult.actionName,
+    finalTitle: verification.finalTitle,
+    finalTrack: verification.finalTrack,
+    verify: 'success',
+  });
+  emit({
+    ok: true,
+    phase: 'playback-history-write',
+    room,
+    historyEntry,
   });
 
   const postControlResults = intent.controlSteps?.length ? applyControlSteps(room, intent.controlSteps) : [];
