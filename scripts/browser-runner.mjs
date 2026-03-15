@@ -40,7 +40,18 @@ export class PurePlayBrowserRunner {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      return parseJson ? JSON.parse(raw) : raw;
+      if (!parseJson) return raw;
+      const trimmed = String(raw || '').trim();
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        const start = Math.max(trimmed.indexOf('{'), trimmed.indexOf('['));
+        if (start >= 0) {
+          const candidate = trimmed.slice(start);
+          return JSON.parse(candidate);
+        }
+        throw new Error(`No JSON payload found in output: ${trimmed.slice(0, 200)}`);
+      }
     } catch (error) {
       const stderr = String(error?.stderr || error?.message || error);
       const profileHint = /Could not connect to Chrome/i.test(stderr)

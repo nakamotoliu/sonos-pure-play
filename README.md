@@ -12,7 +12,9 @@ This skill is designed for **room-targeted media playback** such as:
 
 ## Status
 
-Current track: **Stable enough for guided use**, but not yet a zero-config public release.
+- **Current version:** `0.2.0`
+- **Delivery state:** stable enough for guided use, but not yet a zero-config public release
+- **This iteration focus:** stronger long-intent recall, expanded-result selection, detail/direct-play branching, and verified playback-history writeback
 
 What works well now:
 - room-targeted playback with explicit target room
@@ -25,6 +27,25 @@ Known limitations:
 - `CONTROL_ONLY` path is not yet the focus of this open-source package
 - Sonos Web UI can still behave inconsistently depending on account/service state
 - final verification is intentionally conservative and may report failure in edge cases where Sonos changed too subtly
+
+## What changed in 0.2.0
+
+### Functional changes
+- Added short-intent/recall query expansion in `scripts/query-planner.mjs`.
+- Added original-intent token scoring in `scripts/candidate-ranker.mjs`.
+- Added expanded-result (`查看所有` / `查看更多`) selection support in `scripts/web-flow.mjs`.
+- Added zone-aware filtering so system controls and now-playing UI are less likely to pollute candidate extraction.
+- Reworked result engagement into a state machine that can try detail-open, expand, and direct-play paths.
+
+### Validation evidence
+- Real Sonos E2E playback succeeded for a mood-style request with a post-play `volume=0` control step.
+- CLI verification confirmed queue/title/track change after web action.
+- Playback history is written only after verification succeeds.
+
+### Known remaining gaps
+- Detail-page classification still needs further de-noising.
+- Expanded results can still misclassify some section/type combinations.
+- Query compression is better than before but still not ideal for all long Chinese mood prompts.
 
 ## Required dependencies
 
