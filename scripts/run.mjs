@@ -98,7 +98,11 @@ async function main() {
     intent: queryPlan.intent,
     originalIntent: queryPlan.originalIntent,
     requestKind: queryPlan.requestKind,
+    queryMode: queryPlan.queryMode || 'legacy',
     queries: queryPlan.queries,
+    strategy: queryPlan.strategy,
+    allowedTypes: queryPlan.allowedTypes,
+    flowHints: queryPlan.flowHints,
   });
 
   const preStatus = getStatus(room);
