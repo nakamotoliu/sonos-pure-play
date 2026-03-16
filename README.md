@@ -12,9 +12,9 @@ This skill is designed for **room-targeted media playback** such as:
 
 ## Status
 
-- **Current version:** `0.2.1`
+- **Current version:** `0.2.2`
 - **Delivery state:** stable enough for guided use, but not yet a zero-config public release
-- **This iteration focus:** stronger long-intent recall, expanded-result selection, detail/direct-play branching, and verified playback-history writeback
+- **This iteration focus:** shrink-by-char query fallback, clearer planner logging, expanded-result selection, detail/direct-play branching, and verified playback-history writeback
 
 What works well now:
 - room-targeted playback with explicit target room
@@ -28,20 +28,22 @@ Known limitations:
 - Sonos Web UI can still behave inconsistently depending on account/service state
 - final verification is intentionally conservative and may report failure in edge cases where Sonos changed too subtly
 
-## What changed in 0.2.1
+## What changed in 0.2.2
 
 ### Functional changes
-- Added short-intent/recall query expansion in `scripts/query-planner.mjs`.
-- Added original-intent token scoring in `scripts/candidate-ranker.mjs`.
-- Added expanded-result (`查看所有` / `查看更多`) selection support in `scripts/web-flow.mjs`.
-- Added zone-aware filtering so system controls and now-playing UI are less likely to pollute candidate extraction.
-- Reworked result engagement into a state machine that can try detail-open, expand, and direct-play paths.
-- Added playback-history persistence and pre-selection penalty flow so recently played content can be down-ranked before the next pick.
+- Replaced the active planner path in `scripts/query-planner.mjs` with `shrink-by-char` fallback generation.
+- The planner now starts from the cleaned original intent, then progressively trims one trailing character at a time down to a minimum usable length.
+- Added lightweight sanity filtering so obviously broken partial queries are not emitted.
+- Updated `scripts/run.mjs` query-plan logging to include `queryMode`, `strategy`, `allowedTypes`, and `flowHints`.
+- Existing expanded-result selection, detail/direct-play branching, and playback-history writeback remain in place.
 
-### Semantic intent decomposition
-- The skill does not search only with the raw request text.
-- It first cleans the original media intent, derives `originalIntent`, `requestKind`, priority terms, and multiple recall queries.
-- Short or fuzzy prompts can produce compressed / expanded recall candidates for broader retrieval, while the original intent is still reused during ranking.
+### Query planning model
+- The active planner no longer relies on the previous compressed / expanded recall-query path as its main execution strategy.
+- Instead, it uses a recovery-oriented fallback sequence:
+  1. try the cleaned original intent
+  2. if needed, trim one trailing character and retry
+  3. continue until a minimum usable query length is reached
+- This is meant as a pragmatic recovery strategy for difficult Sonos searches, not the final semantic planner design.
 
 ### Anti-repeat playback history
 - Playback history is loaded before candidate selection.
@@ -56,7 +58,7 @@ Known limitations:
 ### Known remaining gaps
 - Detail-page classification still needs further de-noising.
 - Expanded results can still misclassify some section/type combinations.
-- Query compression is better than before but still not ideal for all long Chinese mood prompts.
+- `shrink-by-char` is an emergency/recovery-oriented planner strategy and is not yet the final semantic search design for all Chinese mood/scene prompts.
 
 ## Required dependencies
 

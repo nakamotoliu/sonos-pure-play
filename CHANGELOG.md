@@ -2,6 +2,17 @@
 
 All notable changes to `sonos-pure-play` should be recorded here.
 
+## 0.2.2 - 2026-03-16
+
+### Changed
+- Replaced the main query-planning path with `shrink-by-char` fallback generation: the planner now tries the cleaned original intent first and then progressively trims one trailing character at a time down to a minimum usable length.
+- Added lightweight sanity filtering so obviously broken partial queries (for example truncated ASCII fragments) are excluded from execution.
+- Updated `scripts/run.mjs` query-plan logging to expose `queryMode`, `strategy`, `allowedTypes`, and `flowHints` for easier release/debug verification.
+
+### Notes
+- This is an experimental recovery-oriented planner change, not the final semantic query design.
+- Legacy planner helper functions may still remain in the file for reference, but the active execution path is now `shrink-by-char`.
+
 ## 0.2.1 - 2026-03-15
 
 ### Fixed
