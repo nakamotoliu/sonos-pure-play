@@ -567,11 +567,69 @@ function diagnose(runner, targetId, phase, locatorRule, missReason) {
   return { phase, locatorRule, missReason, state };
 }
 
-function ensureSearchReady(runner, targetId, log) {
+function readSearchHealth(runner, targetId) {
   const state = runner.readPageState(targetId);
-  log({ ok: true, phase: 'page-state', state });
+  const surface = inspectSearchSurface(runner, targetId);
+  const context = readContentContext(runner, targetId);
+  const bodyPreview = String(surface?.bodyPreview || context?.bodyPreview || '').trim();
+  const pageKind = context?.pageKind || 'UNKNOWN';
+  const onSearchUrl = String(state?.url || '').includes('/search');
+  const hasInput = Boolean(surface?.hasInput);
+  const hasResults = Boolean(surface?.hasRenderedResults || surface?.hasPlayableButton || context?.resultsPresent);
+  const hasSearchHistory = Boolean(surface?.hasSearchHistory || context?.searchHistory);
+  const shellDirty = Boolean(context?.searchShellDirty);
+  const blankShell = onSearchUrl && !hasInput && !hasResults && !hasSearchHistory && !bodyPreview;
+  const status = blankShell
+    ? 'blank-shell'
+    : shellDirty
+      ? 'dirty-shell'
+      : hasResults
+        ? 'results'
+        : hasSearchHistory
+          ? 'history'
+          : hasInput && onSearchUrl
+            ? 'ready'
+            : onSearchUrl
+              ? 'search-no-input'
+              : 'off-search';
+  return {
+    state,
+    surface,
+    context,
+    pageKind,
+    bodyPreview,
+    onSearchUrl,
+    hasInput,
+    hasResults,
+    hasSearchHistory,
+    shellDirty,
+    blankShell,
+    status,
+  };
+}
 
-  if (String(state.url || '').includes('/search')) {
+function ensureSearchReady(runner, targetId, log, options = {}) {
+  const { forceNavigate = false } = options;
+  const before = readSearchHealth(runner, targetId);
+  log({ ok: true, phase: 'page-state', state: before.state });
+  log({ ok: true, phase: 'search-ready', event: 'health-before', health: {
+    status: before.status,
+    pageKind: before.pageKind,
+    onSearchUrl: before.onSearchUrl,
+    hasInput: before.hasInput,
+    hasResults: before.hasResults,
+    hasSearchHistory: before.hasSearchHistory,
+    shellDirty: before.shellDirty,
+    blankShell: before.blankShell,
+    bodyPreview: before.bodyPreview,
+  }});
+
+  if (!forceNavigate && before.onSearchUrl && before.hasInput && !before.shellDirty && !before.blankShell) {
+    log({ ok: true, phase: 'search-ready', event: 'reuse-existing-search-surface', reason: before.status });
+    return before;
+  }
+
+  if (before.onSearchUrl) {
     const closeResult = runner.evaluate(
       targetId,
       `() => {
@@ -624,6 +682,19 @@ function ensureSearchReady(runner, targetId, log) {
   }
 
   runner.navigate(targetId, SEARCH_URL);
+  const after = readSearchHealth(runner, targetId);
+  log({ ok: true, phase: 'search-ready', event: 'health-after-navigate', health: {
+    status: after.status,
+    pageKind: after.pageKind,
+    onSearchUrl: after.onSearchUrl,
+    hasInput: after.hasInput,
+    hasResults: after.hasResults,
+    hasSearchHistory: after.hasSearchHistory,
+    shellDirty: after.shellDirty,
+    blankShell: after.blankShell,
+    bodyPreview: after.bodyPreview,
+  }});
+  return after;
 }
 
 function syncActiveRoom(runner, targetId, room, log) {
@@ -746,30 +817,89 @@ function setSearchInputValue(runner, targetId, label, query, log) {
     targetId,
     `async () => {
       const requested = ${JSON.stringify(label || '')};
-      const candidates = [
-        ...document.querySelectorAll('input,textarea,[contenteditable="true"]'),
-        ...document.querySelectorAll('[role="combobox"],[role="searchbox"]')
-      ];
-      const target = candidates.find((el) => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const selector = [
+        'input',
+        'textarea',
+        '[contenteditable="true"]',
+        '[role="combobox"]',
+        '[role="searchbox"]',
+        '[aria-label*="搜索"]',
+        '[placeholder*="搜索"]',
+        'input[type="search"]',
+        '[data-testid*="search"]',
+        '[class*="search"] input',
+        '[class*="Search"] input'
+      ].join(',');
+      const summarize = (elements) => elements.slice(0, 12).map((el) => ({
+        tag: el.tagName,
+        type: 'type' in el ? (el.type || '') : '',
+        role: el.getAttribute('role') || '',
+        aria: el.getAttribute('aria-label') || '',
+        placeholder: el.getAttribute('placeholder') || '',
+        className: String(el.className || '').slice(0, 120),
+        text: (el.textContent || '').trim().slice(0, 80),
+        contenteditable: el.getAttribute('contenteditable') || '',
+      }));
+      const matchesRequested = (el) => {
         const aria = (el.getAttribute('aria-label') || '').trim();
         const placeholder = (el.getAttribute('placeholder') || '').trim();
         const role = (el.getAttribute('role') || '').trim();
+        const className = String(el.className || '');
+        const type = ('type' in el ? String(el.type || '') : '').trim();
+        const text = (el.textContent || '').trim();
         if (requested && (aria === requested || placeholder === requested)) return true;
         if (role === 'searchbox' || role === 'combobox') return true;
-        if (el.tagName === 'INPUT' && (el.type === 'search' || placeholder.includes('搜索'))) return true;
+        if (type === 'search') return true;
+        if (placeholder.includes('搜索') || aria.includes('搜索')) return true;
+        if (/search/i.test(className) || /搜索/.test(text)) return true;
         return false;
-      }) || document.querySelector('input[type="search"]');
-      if (!target) return { ok: false, reason: 'search-input-not-found' };
-      target.focus();
-      if ('value' in target) target.value = '';
-      target.dispatchEvent(new Event('input', { bubbles: true }));
-      return { ok: true, tag: target.tagName, placeholder: target.getAttribute('placeholder') || '', aria: target.getAttribute('aria-label') || '' };
+      };
+
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const candidates = [...document.querySelectorAll(selector)];
+        const target = candidates.find(matchesRequested) || document.querySelector('input[type="search"]');
+        if (target) {
+          target.focus();
+          if ('click' in target) target.click();
+          if ('value' in target) target.value = '';
+          target.dispatchEvent(new Event('input', { bubbles: true }));
+          return {
+            ok: true,
+            attempt,
+            tag: target.tagName,
+            placeholder: target.getAttribute('placeholder') || '',
+            aria: target.getAttribute('aria-label') || '',
+            role: target.getAttribute('role') || '',
+            type: 'type' in target ? (target.type || '') : '',
+          };
+        }
+        await sleep(350);
+      }
+
+      const candidates = [...document.querySelectorAll(selector)];
+      return {
+        ok: false,
+        reason: 'search-input-not-found',
+        diagnostics: {
+          location: String(location.href || ''),
+          title: String(document.title || ''),
+          bodyPreview: (document.body?.innerText || '').trim().slice(0, 1200),
+          candidateCount: candidates.length,
+          candidates: summarize(candidates),
+          iframeCount: document.querySelectorAll('iframe').length,
+        },
+      };
     }`
   );
   const focused = focusResult?.result || focusResult;
   if (!focused?.ok) {
+    log({ ok: false, phase: 'search', event: 'input-focus-miss', detail: focused });
     throw new SkillError('search', 'SEARCH_INPUT_FOCUS_FAILED', 'Failed to focus the Sonos search input.', {
-      diagnostic: diagnose(runner, targetId, 'search', 'focus search input before paste', focused?.reason || 'not found'),
+      diagnostic: {
+        ...diagnose(runner, targetId, 'search', 'focus search input before paste', focused?.reason || 'not found'),
+        focusProbe: focused,
+      },
     });
   }
 
@@ -1930,20 +2060,23 @@ export function runMediaFlow({ runner, queryPlan, room, actionPreference, playba
 
     if (context?.pageKind === 'SEARCH_HISTORY') {
       lastFailure = { phase: 'search', code: 'SEARCH_HISTORY_PAGE', context: summarizePageContext(context) };
-      log({ ok: true, phase: 'query-rotation', query, reason: 'SEARCH_HISTORY_PAGE', strategy, allowedTypes });
-      ensureSearchReady(runner, targetId, log);
+      log({ ok: true, phase: 'query-rotation', query, reason: 'SEARCH_HISTORY_PAGE', strategy, allowedTypes, action: 'reuse-search-and-shrink-query' });
+      ensureSearchReady(runner, targetId, log, { forceNavigate: false });
       continue;
     }
     if (context?.pageKind === 'SEARCH_SHELL_DIRTY') {
       lastFailure = { phase: 'search', code: 'SEARCH_SHELL_DIRTY', context: summarizePageContext(context) };
-      log({ ok: true, phase: 'query-rotation', query, reason: 'SEARCH_SHELL_DIRTY', strategy, allowedTypes });
-      ensureSearchReady(runner, targetId, log);
+      log({ ok: true, phase: 'query-rotation', query, reason: 'SEARCH_SHELL_DIRTY', strategy, allowedTypes, action: 'reset-search-surface-before-next-query' });
+      ensureSearchReady(runner, targetId, log, { forceNavigate: true });
       continue;
     }
     if (context?.pageKind === 'SEARCH_READY' || context?.pageKind === 'UNKNOWN') {
-      lastFailure = { phase: 'search', code: 'NO_RESULT_RENDERED', context: summarizePageContext(context) };
-      log({ ok: true, phase: 'query-rotation', query, reason: 'NO_RESULT_RENDERED', strategy, allowedTypes });
-      ensureSearchReady(runner, targetId, log);
+      const health = readSearchHealth(runner, targetId);
+      const reason = health.blankShell ? 'SEARCH_PAGE_BROKEN' : 'NO_RESULT_RENDERED';
+      const action = health.blankShell ? 'hard-reset-search-surface' : 'reuse-search-and-shrink-query';
+      lastFailure = { phase: 'search', code: reason, context: summarizePageContext(context), health: { status: health.status, blankShell: health.blankShell, hasInput: health.hasInput, bodyPreview: health.bodyPreview } };
+      log({ ok: true, phase: 'query-rotation', query, reason, strategy, allowedTypes, action, health: { status: health.status, blankShell: health.blankShell, hasInput: health.hasInput, bodyPreview: health.bodyPreview } });
+      ensureSearchReady(runner, targetId, log, { forceNavigate: health.blankShell });
       continue;
     }
 
