@@ -1512,22 +1512,102 @@ function collectClusterCandidates({ searchResults, catalog, playbackHistory = []
   };
 }
 
+function isExactSongMatch(entry, query) {
+  if (!entry) return false;
+  const normalizedQuery = normalizeText(query || '');
+  if (!normalizedQuery) return false;
+  const title = normalizeText(entry.title || '');
+  const clickLabel = normalizeText(String(entry.clickLabel || '').replace(/^播放/, ''));
+  const scopeText = normalizeText(entry.scopeText || '');
+  const exactTitle = title === normalizedQuery || clickLabel === normalizedQuery;
+  const tightScoped = scopeText.includes(normalizedQuery) && normalizedQuery.length >= 2;
+  return Boolean((entry.type === 'song' || entry.sectionKind === 'song') && (exactTitle || tightScoped));
+}
+
+function candidateTypePriority(entry) {
+  const type = entry?.type || entry?.sectionKind || 'unknown';
+  if (type === 'playlist') return 4;
+  if (type === 'album') return 3;
+  if (type === 'artist') return 2;
+  if (type === 'song') return 1;
+  return 0;
+}
+
+function scoreCandidateByIntent(entry, query, exactSongMode) {
+  const haystack = normalizeText([
+    entry?.title,
+    entry?.clickLabel,
+    entry?.scopeText,
+    entry?.sectionLabel,
+    entry?.service,
+  ].filter(Boolean).join(' '));
+  const normalizedQuery = normalizeText(query || '');
+  const title = normalizeText(entry?.title || '');
+  const scopeText = normalizeText(entry?.scopeText || '');
+  const type = entry?.type || entry?.sectionKind || 'unknown';
+
+  let score = 0;
+  if (normalizedQuery && haystack.includes(normalizedQuery)) score += 20;
+  if (normalizedQuery && title === normalizedQuery) score += 50;
+  if (normalizedQuery && scopeText.includes(normalizedQuery)) score += 8;
+
+  if (exactSongMode) {
+    if (type === 'song') score += 40;
+    if (type === 'playlist') score -= 20;
+    if (type === 'album') score -= 10;
+    if (type === 'artist') score -= 5;
+  } else {
+    if (type === 'playlist') score += 40;
+    if (type === 'album') score += 10;
+    if (type === 'artist') score += 4;
+    if (type === 'song') score -= 15;
+  }
+
+  score += candidateTypePriority(entry);
+  if (entry?.recentlyPlayed) score -= 5;
+  return score;
+}
+
 function selectBestCandidate({ queryPlan, query, searchResults, catalog, playbackHistory, log }) {
   const orderedPool = collectClusterCandidates({ searchResults, catalog, playbackHistory, query });
-  const selected = orderedPool?.selected || null;
   const ranked = Array.isArray(orderedPool?.ordered) ? orderedPool.ordered : [];
+  const exactSongCandidates = ranked.filter((entry) => isExactSongMatch(entry, query));
+  const exactSongMode = exactSongCandidates.length > 0;
+  const rescored = ranked
+    .map((entry, index) => ({
+      ...entry,
+      intentScore: scoreCandidateByIntent(entry, query, exactSongMode),
+      originalOrder: index,
+    }))
+    .sort((a, b) => {
+      if (b.intentScore !== a.intentScore) return b.intentScore - a.intentScore;
+      return a.originalOrder - b.originalOrder;
+    });
+  const selected = rescored[0] || null;
 
   log({
     ok: true,
     phase: 'candidate-order',
     query,
-    strategy: 'page-order-history-rotation',
-    allowedTypes: [],
+    strategy: exactSongMode ? 'exact-song-first' : 'fallback-playlist-first',
+    allowedTypes: exactSongMode ? ['song'] : ['playlist', 'album', 'artist', 'song'],
     selected,
-    rankedTop: ranked.slice(0, 5),
+    rankedTop: rescored.slice(0, 5).map((entry) => ({
+      title: entry.title,
+      type: entry.type,
+      sectionKind: entry.sectionKind,
+      targetIndex: entry.targetIndex,
+      intentScore: entry.intentScore,
+      scopeText: entry.scopeText,
+    })),
     debug: {
-      mode: 'page-order-history-rotation',
+      mode: exactSongMode ? 'exact-song-first' : 'fallback-playlist-first',
       clusterDebug: orderedPool?.debug || null,
+      exactSongCandidates: exactSongCandidates.map((entry) => ({
+        title: entry.title,
+        type: entry.type,
+        targetIndex: entry.targetIndex ?? null,
+      })),
       recentlyPlayedSkipped: ranked.filter((entry) => entry?.recentlyPlayed).map((entry) => ({
         title: entry.title,
         targetIndex: entry.targetIndex ?? null,
@@ -1537,10 +1617,11 @@ function selectBestCandidate({ queryPlan, query, searchResults, catalog, playbac
 
   return {
     selected,
-    ranked,
+    ranked: rescored,
     debug: {
-      mode: 'page-order-history-rotation',
+      mode: exactSongMode ? 'exact-song-first' : 'fallback-playlist-first',
       clusterDebug: orderedPool?.debug || null,
+      exactSongMode,
     },
   };
 }
