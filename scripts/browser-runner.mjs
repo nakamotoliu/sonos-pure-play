@@ -1,66 +1,53 @@
+/**
+ * browser-runner.mjs — Browser automation for Sonos Pure Play.
+ *
+ * Uses the official `openclaw browser` CLI/runtime instead of a custom CDP
+ * bridge. API surface is kept compatible so web-flow.mjs / run.mjs remain
+ * unchanged.
+ */
+
 import { execFileSync } from 'node:child_process';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 
 import { SkillError } from './normalize.mjs';
 import { SEARCH_URL, SONOS_HOST } from './selectors.mjs';
 
-function readGatewayToken() {
-  if (process.env.OPENCLAW_GATEWAY_TOKEN) return process.env.OPENCLAW_GATEWAY_TOKEN;
-
-  try {
-    const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    return config?.gateway?.auth?.token || '';
-  } catch {
-    return '';
-  }
-}
-
 export class PurePlayBrowserRunner {
-  constructor({ profile = 'user', logger = () => {}, baseUrl = SEARCH_URL } = {}) {
+  constructor({ profile = 'openclaw', logger = () => {}, baseUrl = SEARCH_URL } = {}) {
     this.profile = profile;
     this.logger = logger;
     this.baseUrl = baseUrl;
-    this.gatewayToken = readGatewayToken();
   }
 
   log(event) {
     this.logger({ ok: true, phase: 'browser-runner', ...event });
   }
 
+  /**
+   * Execute an `openclaw browser` command synchronously.
+   */
   oc(args, { parseJson = true } = {}) {
-    const base = ['browser', '--browser-profile', this.profile, '--json'];
-    if (this.gatewayToken) base.push('--token', this.gatewayToken);
-    base.push(...args);
-
     try {
-      const raw = execFileSync('openclaw', base, {
+      const raw = execFileSync('openclaw', ['browser', '--json', '--browser-profile', this.profile, ...args], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 60000,
       });
       if (!parseJson) return raw;
       const trimmed = String(raw || '').trim();
       try {
         return JSON.parse(trimmed);
       } catch {
-        const start = Math.max(trimmed.indexOf('{'), trimmed.indexOf('['));
-        if (start >= 0) {
-          const candidate = trimmed.slice(start);
-          return JSON.parse(candidate);
-        }
-        throw new Error(`No JSON payload found in output: ${trimmed.slice(0, 200)}`);
+        const start = trimmed.indexOf('{');
+        if (start >= 0) return JSON.parse(trimmed.slice(start));
+        throw new Error(`No JSON payload found in output: ${trimmed.slice(0, 400)}`);
       }
     } catch (error) {
       const stderr = String(error?.stderr || error?.message || error);
-      const profileHint = /Could not connect to Chrome/i.test(stderr)
-        ? ` OpenClaw browser profile '${this.profile}' is not attached to a live Chrome runtime.`
-        : '';
+      const stdout = String(error?.stdout || '');
       throw new SkillError(
         'browser-runner',
         'BROWSER_ATTACH_FAILED',
-        `${stderr}${profileHint}`.trim(),
+        `${stderr || stdout}`.trim(),
         { args, profile: this.profile }
       );
     }
@@ -84,7 +71,6 @@ export class PurePlayBrowserRunner {
 
   navigate(targetId, url) {
     this.oc(['navigate', url, '--target-id', targetId], { parseJson: false });
-    this.waitForLoad(targetId);
   }
 
   press(targetId, key) {
@@ -95,13 +81,17 @@ export class PurePlayBrowserRunner {
     this.oc(['click', ref, '--target-id', targetId], { parseJson: false });
   }
 
+  start() {
+    this.oc(['start'], { parseJson: false });
+  }
+
   clickButtonByLabel(targetId, labels = []) {
     const result = this.evaluate(
       targetId,
       `() => {
         const labels = ${JSON.stringify(['__LABELS__'])};
         const wanted = labels.filter((value) => value !== '__LABELS__');
-        const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
         const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
         const textOf = (el) => normalize(el?.getAttribute('aria-label') || el?.textContent || '');
         const buttons = [...document.querySelectorAll('button,[role="button"],a,[role="link"]')].filter(visible);
@@ -137,13 +127,14 @@ export class PurePlayBrowserRunner {
   }
 
   ensureSonosTab() {
+    this.start();
     let tab = this.tabs().find((entry) => String(entry.url || '').includes(SONOS_HOST));
 
     if (!tab) {
       this.oc(['open', SEARCH_URL], { parseJson: false });
-      const deadline = Date.now() + 30000;
+      const deadline = Date.now() + 45000;
       while (Date.now() < deadline) {
-        this.waitMs(500);
+        this.waitMs(1000);
         tab = this.tabs().find((entry) => String(entry.url || '').includes(SONOS_HOST));
         if (tab?.targetId) break;
       }
@@ -153,12 +144,14 @@ export class PurePlayBrowserRunner {
       throw new SkillError(
         'browser-runner',
         'SONOS_WEB_NOT_READY',
-        'Unable to find or open the Sonos Web App in the OpenClaw browser runtime.'
+        'Unable to find or open the Sonos Web App in Chrome.'
       );
     }
 
     this.focus(tab.targetId);
+    this.waitMs(2000);
     this.waitForLoad(tab.targetId);
+    this.waitMs(3000);
     this.log({ event: 'tab-ready', targetId: tab.targetId, url: tab.url || null });
     return tab.targetId;
   }
@@ -167,15 +160,30 @@ export class PurePlayBrowserRunner {
     const result = this.evaluate(
       targetId,
       `() => {
-        const bodyText = (document.body?.innerText || '').trim();
+        const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const textOf = (el) => normalize(el?.getAttribute('aria-label') || el?.textContent || '');
+        const isNowPlaying = (el) => !!el?.closest('footer,[data-testid*="now-playing"],[data-qa*="now-playing"],[class*="now-playing"],[class*="NowPlaying"]');
+        const isSystemControl = (el) => !!el?.closest('header,nav,[role="navigation"],[role="banner"],[role="toolbar"],[data-testid*="header"],[data-testid*="system"]');
+        const bodyText = normalize(document.body?.innerText || '');
         const url = location.href;
         const title = document.title || '';
-        const menuItems = [...document.querySelectorAll('button,[role="button"],[role="menuitem"],li')]
-          .map((el) => (el.getAttribute('aria-label') || el.textContent || '').trim())
-          .filter(Boolean);
+        const visibleButtons = [...document.querySelectorAll('button,[role="button"],a,[role="link"]')].filter(visible);
+        const main = document.querySelector('main') || document.body;
+        const mainText = normalize(main?.innerText || '');
+        const searchHistory = /搜索记录/.test(bodyText);
+        const searchShellDirty = /最近播放|您的服务|Sonos收藏夹|您的信号源|线路输入/.test(bodyText);
+        const isServiceDetailUrl = /\\/browse\\/services\\//.test(url);
+        const isPlaylistDetailUrl = /\\/browse\\/services\\/.*\\/playlist\\//.test(url);
+        const visibleMoreOptions = visibleButtons
+          .filter((el) => textOf(el) === '更多选项')
+          .map((el) => ({
+            label: textOf(el),
+            zone: isNowPlaying(el) ? 'now-playing-bar' : isSystemControl(el) ? 'system-controls' : 'main-content',
+          }));
         const pageKind =
-          menuItems.includes('更多选项') ? 'DETAIL_PAGE' :
-          url.includes('/search') && /搜索记录|查看全部|网易云音乐|QQ音乐|播放/.test(bodyText) ? 'SEARCH_LIVE' :
+          searchHistory ? 'SEARCH_HISTORY' :
+          searchShellDirty ? 'SEARCH_SHELL_DIRTY' :
           url.includes('/search') ? 'SEARCH_READY' :
           url.includes('/web-app') ? 'APP_HOME' :
           'UNKNOWN';
@@ -183,6 +191,7 @@ export class PurePlayBrowserRunner {
           url,
           title,
           pageKind,
+          visibleMoreOptions,
           bodyPreview: bodyText.slice(0, 800),
         };
       }`

@@ -6,9 +6,15 @@ description: |-
 
 # Sonos Pure Play Skill
 
+## Prerequisites
+- Use the official OpenClaw-managed browser profile: `openclaw`.
+- The bundled browser plugin must be enabled and loadable (`plugins.allow` includes `browser`, `plugins.entries.browser.enabled=true`, `browser.enabled=true`).
+- **First-time setup**: Log into Sonos Web (play.sonos.com) once in the managed `openclaw` profile. After that, the session persists in `~/.openclaw/browser/openclaw/user-data`.
+- Browser operations should go through the official OpenClaw browser runtime / CLI, not a custom CDP bridge.
+
 ## Core rule
 - Use Sonos CLI as the source of truth for room resolution, group normalization, and playback verification.
-- Use OpenClaw browser runtime for Sonos Web search, detail-page entry, menu reading, and playback action clicks.
+- Use the official OpenClaw browser runtime for Sonos Web search, detail-page entry, menu reading, and playback action clicks.
 - Prefer deterministic execution order over improvisation.
 
 ## Boundaries
@@ -20,7 +26,7 @@ description: |-
 - final truth verification
 
 ### Browser runtime only
-- open Sonos Web
+- open Sonos Web in the OpenClaw-managed browser
 - recover search state
 - enter search text
 - inspect search results
@@ -57,7 +63,7 @@ description: |-
 - `scripts/intent.mjs` = request split and intent analysis
 - `scripts/query-planner.mjs` = media request to ordered search queries
 - `scripts/cli-control.mjs` = Sonos CLI room/group/state helpers
-- `scripts/browser-runner.mjs` = OpenClaw browser wrapper
+- `scripts/browser-runner.mjs` = browser wrapper (calls official `openclaw browser` CLI via execFileSync)
 - `scripts/web-flow.mjs` = web state machine
 - `scripts/normalize.mjs` = shared normalization helpers
 - `scripts/verify.mjs` = final playback verification
