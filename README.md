@@ -12,53 +12,46 @@ This skill is designed for **room-targeted media playback** such as:
 
 ## Status
 
-- **Current version:** `0.2.2`
+- **Current version:** `0.2.3`
 - **Delivery state:** stable enough for guided use, but not yet a zero-config public release
-- **This iteration focus:** shrink-by-char query fallback, clearer planner logging, expanded-result selection, detail/direct-play branching, and verified playback-history writeback
+- **This iteration focus:** playlist-first candidate enforcement, copyright-restricted candidate rejection, stale-detail detection, CLI play fallback, and clearer verification acceptance signals
 
 What works well now:
 - room-targeted playback with explicit target room
 - grouped-room normalization (`solo`) before playback
 - search-state recovery (`close` / `back` / `home` -> re-enter search)
-- real-result filtering for playlist / album / mood-style content
-- CLI truth verification after web action
+- playlist-first execution can now enforce playlist-only candidate execution when the planner asks for it
+- copyright-restricted detail targets can now be rejected before playback action is issued
+- CLI truth verification after web action, with a conservative `play` retry when replace-queue lands but transport does not start
 
 Known limitations:
 - `CONTROL_ONLY` path is not yet the focus of this open-source package
 - Sonos Web UI can still behave inconsistently depending on account/service state
 - final verification is intentionally conservative and may report failure in edge cases where Sonos changed too subtly
 
-## What changed in 0.2.2
+## What changed in 0.2.3
 
 ### Functional changes
-- Replaced the active planner path in `scripts/query-planner.mjs` with `shrink-by-char` fallback generation.
-- The planner now starts from the cleaned original intent, then progressively trims one trailing character at a time down to a minimum usable length.
-- Added lightweight sanity filtering so obviously broken partial queries are not emitted.
-- Updated `scripts/run.mjs` query-plan logging to include `queryMode`, `strategy`, `allowedTypes`, and `flowHints`.
-- Existing expanded-result selection, detail/direct-play branching, and playback-history writeback remain in place.
+- Playlist-first execution now filters the final execution pool so `allowedTypes=["playlist"]` does not accidentally execute song/artist candidates that scored earlier in raw ranking.
+- Detail-page restriction scanning now checks the selected detail region and table rows for `版权受限` signals and rejects blocked candidates before menu action.
+- Added stale-detail rejection to reduce cases where old room/now-playing residue poisons the selected detail page.
+- Updated CLI verification so `替换队列` flows can issue a conservative `play` retry when transport does not reach `PLAYING` on its own.
+- Verification now returns an `acceptedBy` field to distinguish queue-proof success from weaker fallback-signal success.
 
-### Query planning model
-- The active planner no longer relies on the previous compressed / expanded recall-query path as its main execution strategy.
-- Instead, it uses a recovery-oriented fallback sequence:
-  1. try the cleaned original intent
-  2. if needed, trim one trailing character and retry
-  3. continue until a minimum usable query length is reached
-- This is meant as a pragmatic recovery strategy for difficult Sonos searches, not the final semantic planner design.
-
-### Anti-repeat playback history
-- Playback history is loaded before candidate selection.
-- Candidate ranking applies history penalty scoring to reduce repeated hits for recently played content.
-- History is written only after CLI verification succeeds, so failed or ambiguous runs do not pollute memory.
+### Why this release exists
+- Sonos Web was still selecting restricted or wrong-shape candidates for requests like `李荣浩 精选`.
+- In practice, the UI could surface a restricted album-like result ahead of a real playlist, and transport could remain stopped after queue replacement.
+- This iteration hardens the handoff between browser selection and CLI truth so the flow can skip restricted candidates and still recover playback.
 
 ### Validation evidence
-- Real Sonos E2E playback succeeded for a mood-style request with a post-play `volume=0` control step.
-- CLI verification confirmed queue/title/track change after web action.
-- Playback history is written only after verification succeeds.
+- Real E2E rerun for `李荣浩 精选` in `客厅` skipped the restricted `華語歌曲精選集 - 李榮浩` path.
+- The flow selected playlist `听李荣浩热门精选`, executed `替换队列`, and CLI verification ended in `PLAYING` with final title `不将就`.
+- Verification succeeded via `acceptedBy: fallback-signals`, which is now explicitly exposed in logs.
 
 ### Known remaining gaps
-- Detail-page classification still needs further de-noising.
-- Expanded results can still misclassify some section/type combinations.
-- `shrink-by-char` is an emergency/recovery-oriented planner strategy and is not yet the final semantic search design for all Chinese mood/scene prompts.
+- Raw ranking metadata can still list non-playlist candidates ahead of the final execution candidate; execution filtering now corrects that, but the ranking/debug payload is not yet fully normalized.
+- Stale detail detection is still heuristic and may need further room-agnostic cleanup.
+- Sonos Web DOM instability remains a real source of flakiness.
 
 ## Required dependencies
 

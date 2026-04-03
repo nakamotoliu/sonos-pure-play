@@ -12,6 +12,10 @@ function titleLooksRelevant({ query, selectedContent, postStatus }) {
   return tokens.some((token) => haystack.includes(token));
 }
 
+function queueLooksChanged(preQueue, postQueue) {
+  return preQueue !== postQueue || getQueueCount(postQueue) !== getQueueCount(preQueue);
+}
+
 export function verifyMediaPlayback({
   room,
   query,
@@ -22,7 +26,9 @@ export function verifyMediaPlayback({
   followupStatus,
   preQueue,
   postQueue,
+  retryPlay,
 }) {
+  let effectiveFollowupStatus = followupStatus;
   if (!groupIncludesRoom(postStatus.group, room)) {
     throw new SkillError('verify-cli', 'CLI_VERIFY_FAILED', 'Target room is not present in the Sonos group reported after playback.', {
       room,
@@ -30,32 +36,46 @@ export function verifyMediaPlayback({
     });
   }
 
-  if (String(followupStatus.state || '').toUpperCase() !== 'PLAYING') {
+  if (String(effectiveFollowupStatus.state || '').toUpperCase() !== 'PLAYING') {
+    if (typeof retryPlay === 'function') {
+      const retried = retryPlay();
+      if (String(retried?.state || '').toUpperCase() === 'PLAYING') {
+        effectiveFollowupStatus = retried;
+      }
+    }
+  }
+
+  if (String(effectiveFollowupStatus.state || '').toUpperCase() !== 'PLAYING') {
     throw new SkillError('verify-cli', 'CLI_VERIFY_FAILED', 'Sonos CLI did not confirm PLAYING after the web action.', {
       room,
-      state: followupStatus.state || null,
-      title: followupStatus.title || null,
-      track: followupStatus.track || null,
+      state: effectiveFollowupStatus.state || null,
+      title: effectiveFollowupStatus.title || null,
+      track: effectiveFollowupStatus.track || null,
       actionName,
     });
   }
 
-  const queueChanged = preQueue !== postQueue || getQueueCount(postQueue) !== getQueueCount(preQueue);
+  const queueChanged = queueLooksChanged(preQueue, postQueue);
   const prePosition = parseTimeToSeconds(postStatus.position);
   const followupPosition = parseTimeToSeconds(followupStatus.position);
   const progressAdvanced = prePosition !== null && followupPosition !== null && followupPosition > prePosition;
-  const titleChanged = normalizeText(preStatus.title) !== normalizeText(followupStatus.title);
-  const trackChanged = normalizeText(preStatus.track) !== normalizeText(followupStatus.track);
-  const relevantTitle = titleLooksRelevant({ query, selectedContent, postStatus: followupStatus });
+  const titleChanged = normalizeText(preStatus.title) !== normalizeText(effectiveFollowupStatus.title);
+  const trackChanged = normalizeText(preStatus.track) !== normalizeText(effectiveFollowupStatus.track);
+  const relevantTitle = titleLooksRelevant({ query, selectedContent, postStatus: effectiveFollowupStatus });
 
-  if (!queueChanged && !progressAdvanced && !titleChanged && !trackChanged) {
+  const acceptedByQueueProof = queueChanged;
+  const acceptedByFallbackSignals = progressAdvanced || titleChanged || trackChanged;
+
+  if (!acceptedByQueueProof && !acceptedByFallbackSignals) {
     throw new SkillError('verify-cli', 'CLI_VERIFY_FAILED', 'CLI status changed too little to prove playback moved to the requested content.', {
       room,
       actionName,
       preTitle: preStatus.title || null,
-      postTitle: followupStatus.title || null,
+      postTitle: effectiveFollowupStatus.title || null,
       preTrack: preStatus.track || null,
-      postTrack: followupStatus.track || null,
+      postTrack: effectiveFollowupStatus.track || null,
+      preQueueCount: getQueueCount(preQueue),
+      postQueueCount: getQueueCount(postQueue),
     });
   }
 
@@ -66,8 +86,9 @@ export function verifyMediaPlayback({
     titleChanged,
     trackChanged,
     relevantTitle,
-    finalState: followupStatus.state || null,
-    finalTitle: followupStatus.title || null,
-    finalTrack: followupStatus.track || null,
+    acceptedBy: acceptedByQueueProof ? 'queue-proof' : 'fallback-signals',
+    finalState: effectiveFollowupStatus.state || null,
+    finalTitle: effectiveFollowupStatus.title || null,
+    finalTrack: effectiveFollowupStatus.track || null,
   };
 }

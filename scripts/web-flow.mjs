@@ -14,6 +14,7 @@ const MIN_VIEW_ALL_SELECTION_SCORE = 6;
 const TITLE_BLOCKLIST = /更多选项|查看全部|查看所有|查看更多|返回|首页|设置为有效|群组|房间|音量/;
 const VIEW_ALL_LABELS = /查看全部|查看所有|查看更多|展开/;
 const DIRTY_SHELL_SIGNALS = /最近播放|您的服务|Sonos收藏夹|您的信号源|线路输入/;
+const COPYRIGHT_RESTRICTED_PATTERN = /版权受限/;
 const TYPE_LABELS = {
   playlist: /(播放列表|歌单|playlist|精选|合集)/i,
   album: /(专辑|album)/i,
@@ -164,6 +165,18 @@ function isAllowedMusicSource(entry) {
   if (!haystack) return false;
   if (BLOCKED_SOURCE_PATTERNS.test(haystack)) return false;
   return NON_SONOS_SERVICE_PATTERN.test(haystack);
+}
+
+function containsCopyrightRestricted(value) {
+  return COPYRIGHT_RESTRICTED_PATTERN.test(normalizeWhitespace(value || ''));
+}
+
+function collectRestrictionHits(values = []) {
+  return [...new Set(
+    values
+      .map((value) => normalizeWhitespace(value || ''))
+      .filter((value) => containsCopyrightRestricted(value))
+  )];
 }
 
 function readContentContext(runner, targetId) {
@@ -391,6 +404,13 @@ function readContentContext(runner, targetId) {
         return candidates[0] || null;
       })();
 
+      const detailRows = structuralDetail
+        ? [...document.querySelectorAll('[role="table"] [role="row"], table tr, [role="grid"] [role="row"]')]
+            .filter(visible)
+            .map((row) => textOf(row))
+            .filter(Boolean)
+        : [];
+
       const detailActionArea = structuralDetail ? {
         index: -1,
         heading: structuralDetail.heading,
@@ -447,6 +467,7 @@ function readContentContext(runner, targetId) {
           actionArea: detailActionArea,
           kind: detailKind,
           structural: detailActionArea?.structural || null,
+          rows: detailRows.slice(0, 20),
         } : null,
         aggregationContainers: aggregationContainers.map((entry) => ({
           index: entry.index,
@@ -567,69 +588,11 @@ function diagnose(runner, targetId, phase, locatorRule, missReason) {
   return { phase, locatorRule, missReason, state };
 }
 
-function readSearchHealth(runner, targetId) {
+function ensureSearchReady(runner, targetId, log) {
   const state = runner.readPageState(targetId);
-  const surface = inspectSearchSurface(runner, targetId);
-  const context = readContentContext(runner, targetId);
-  const bodyPreview = String(surface?.bodyPreview || context?.bodyPreview || '').trim();
-  const pageKind = context?.pageKind || 'UNKNOWN';
-  const onSearchUrl = String(state?.url || '').includes('/search');
-  const hasInput = Boolean(surface?.hasInput);
-  const hasResults = Boolean(surface?.hasRenderedResults || surface?.hasPlayableButton || context?.resultsPresent);
-  const hasSearchHistory = Boolean(surface?.hasSearchHistory || context?.searchHistory);
-  const shellDirty = Boolean(context?.searchShellDirty);
-  const blankShell = onSearchUrl && !hasInput && !hasResults && !hasSearchHistory && !bodyPreview;
-  const status = blankShell
-    ? 'blank-shell'
-    : shellDirty
-      ? 'dirty-shell'
-      : hasResults
-        ? 'results'
-        : hasSearchHistory
-          ? 'history'
-          : hasInput && onSearchUrl
-            ? 'ready'
-            : onSearchUrl
-              ? 'search-no-input'
-              : 'off-search';
-  return {
-    state,
-    surface,
-    context,
-    pageKind,
-    bodyPreview,
-    onSearchUrl,
-    hasInput,
-    hasResults,
-    hasSearchHistory,
-    shellDirty,
-    blankShell,
-    status,
-  };
-}
+  log({ ok: true, phase: 'page-state', state });
 
-function ensureSearchReady(runner, targetId, log, options = {}) {
-  const { forceNavigate = false } = options;
-  const before = readSearchHealth(runner, targetId);
-  log({ ok: true, phase: 'page-state', state: before.state });
-  log({ ok: true, phase: 'search-ready', event: 'health-before', health: {
-    status: before.status,
-    pageKind: before.pageKind,
-    onSearchUrl: before.onSearchUrl,
-    hasInput: before.hasInput,
-    hasResults: before.hasResults,
-    hasSearchHistory: before.hasSearchHistory,
-    shellDirty: before.shellDirty,
-    blankShell: before.blankShell,
-    bodyPreview: before.bodyPreview,
-  }});
-
-  if (!forceNavigate && before.onSearchUrl && before.hasInput && !before.shellDirty && !before.blankShell) {
-    log({ ok: true, phase: 'search-ready', event: 'reuse-existing-search-surface', reason: before.status });
-    return before;
-  }
-
-  if (before.onSearchUrl) {
+  if (String(state.url || '').includes('/search')) {
     const closeResult = runner.evaluate(
       targetId,
       `() => {
@@ -682,19 +645,6 @@ function ensureSearchReady(runner, targetId, log, options = {}) {
   }
 
   runner.navigate(targetId, SEARCH_URL);
-  const after = readSearchHealth(runner, targetId);
-  log({ ok: true, phase: 'search-ready', event: 'health-after-navigate', health: {
-    status: after.status,
-    pageKind: after.pageKind,
-    onSearchUrl: after.onSearchUrl,
-    hasInput: after.hasInput,
-    hasResults: after.hasResults,
-    hasSearchHistory: after.hasSearchHistory,
-    shellDirty: after.shellDirty,
-    blankShell: after.blankShell,
-    bodyPreview: after.bodyPreview,
-  }});
-  return after;
 }
 
 function syncActiveRoom(runner, targetId, room, log) {
@@ -817,89 +767,30 @@ function setSearchInputValue(runner, targetId, label, query, log) {
     targetId,
     `async () => {
       const requested = ${JSON.stringify(label || '')};
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const selector = [
-        'input',
-        'textarea',
-        '[contenteditable="true"]',
-        '[role="combobox"]',
-        '[role="searchbox"]',
-        '[aria-label*="搜索"]',
-        '[placeholder*="搜索"]',
-        'input[type="search"]',
-        '[data-testid*="search"]',
-        '[class*="search"] input',
-        '[class*="Search"] input'
-      ].join(',');
-      const summarize = (elements) => elements.slice(0, 12).map((el) => ({
-        tag: el.tagName,
-        type: 'type' in el ? (el.type || '') : '',
-        role: el.getAttribute('role') || '',
-        aria: el.getAttribute('aria-label') || '',
-        placeholder: el.getAttribute('placeholder') || '',
-        className: String(el.className || '').slice(0, 120),
-        text: (el.textContent || '').trim().slice(0, 80),
-        contenteditable: el.getAttribute('contenteditable') || '',
-      }));
-      const matchesRequested = (el) => {
+      const candidates = [
+        ...document.querySelectorAll('input,textarea,[contenteditable="true"]'),
+        ...document.querySelectorAll('[role="combobox"],[role="searchbox"]')
+      ];
+      const target = candidates.find((el) => {
         const aria = (el.getAttribute('aria-label') || '').trim();
         const placeholder = (el.getAttribute('placeholder') || '').trim();
         const role = (el.getAttribute('role') || '').trim();
-        const className = String(el.className || '');
-        const type = ('type' in el ? String(el.type || '') : '').trim();
-        const text = (el.textContent || '').trim();
         if (requested && (aria === requested || placeholder === requested)) return true;
         if (role === 'searchbox' || role === 'combobox') return true;
-        if (type === 'search') return true;
-        if (placeholder.includes('搜索') || aria.includes('搜索')) return true;
-        if (/search/i.test(className) || /搜索/.test(text)) return true;
+        if (el.tagName === 'INPUT' && (el.type === 'search' || placeholder.includes('搜索'))) return true;
         return false;
-      };
-
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        const candidates = [...document.querySelectorAll(selector)];
-        const target = candidates.find(matchesRequested) || document.querySelector('input[type="search"]');
-        if (target) {
-          target.focus();
-          if ('click' in target) target.click();
-          if ('value' in target) target.value = '';
-          target.dispatchEvent(new Event('input', { bubbles: true }));
-          return {
-            ok: true,
-            attempt,
-            tag: target.tagName,
-            placeholder: target.getAttribute('placeholder') || '',
-            aria: target.getAttribute('aria-label') || '',
-            role: target.getAttribute('role') || '',
-            type: 'type' in target ? (target.type || '') : '',
-          };
-        }
-        await sleep(350);
-      }
-
-      const candidates = [...document.querySelectorAll(selector)];
-      return {
-        ok: false,
-        reason: 'search-input-not-found',
-        diagnostics: {
-          location: String(location.href || ''),
-          title: String(document.title || ''),
-          bodyPreview: (document.body?.innerText || '').trim().slice(0, 1200),
-          candidateCount: candidates.length,
-          candidates: summarize(candidates),
-          iframeCount: document.querySelectorAll('iframe').length,
-        },
-      };
+      }) || document.querySelector('input[type="search"]');
+      if (!target) return { ok: false, reason: 'search-input-not-found' };
+      target.focus();
+      if ('value' in target) target.value = '';
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      return { ok: true, tag: target.tagName, placeholder: target.getAttribute('placeholder') || '', aria: target.getAttribute('aria-label') || '' };
     }`
   );
   const focused = focusResult?.result || focusResult;
   if (!focused?.ok) {
-    log({ ok: false, phase: 'search', event: 'input-focus-miss', detail: focused });
     throw new SkillError('search', 'SEARCH_INPUT_FOCUS_FAILED', 'Failed to focus the Sonos search input.', {
-      diagnostic: {
-        ...diagnose(runner, targetId, 'search', 'focus search input before paste', focused?.reason || 'not found'),
-        focusProbe: focused,
-      },
+      diagnostic: diagnose(runner, targetId, 'search', 'focus search input before paste', focused?.reason || 'not found'),
     });
   }
 
@@ -1050,6 +941,53 @@ function listViewAllCandidates(runner, targetId) {
     candidates: candidates.map((entry) => ({ ...entry, sectionKind: entry.sectionKind || inferSectionKind(entry.section) })),
     sectionKinds: sections.map((entry) => entry.sectionKind).filter(Boolean),
   };
+}
+
+function inspectCandidateRestrictions({ detailSignals }) {
+  const detailAction = detailSignals?.detail?.actionArea || null;
+  const detailText = [
+    detailSignals?.detail?.playlistTitle || '',
+    detailSignals?.headingText || '',
+    detailAction?.heading || '',
+    detailSignals?.detail?.service || '',
+    detailAction?.playLabel || '',
+    detailAction?.shuffleLabel || '',
+  ].join(' ');
+  const detailRows = Array.isArray(detailSignals?.detail?.rows) ? detailSignals.detail.rows : [];
+
+  const hits = collectRestrictionHits([
+    detailText,
+    ...detailRows,
+  ]);
+
+  return {
+    blocked: hits.length > 0,
+    reason: hits.length ? 'COPYRIGHT_RESTRICTED' : null,
+    hits,
+  };
+}
+
+function detectStaleDetailPage({ detailSignals, roomSync }) {
+  const detailTitle = normalizeText(detailSignals?.detail?.playlistTitle || detailSignals?.headingText || '');
+  const roomPreview = normalizeText(roomSync?.bodyPreview || '');
+  const roomItems = Array.isArray(roomSync?.roomCardSamples) ? roomSync.roomCardSamples.map((value) => normalizeText(value)) : [];
+
+  if (!detailTitle) return { stale: false, reason: null };
+
+  const hasDetailInRoomSignals = roomPreview.includes(detailTitle) || roomItems.some((value) => value.includes(detailTitle));
+  const activeTrackSignals = roomItems.filter((value) => value.includes('客厅 play5') || value.includes('播放群组'));
+  const activeTrackMentionsRestriction = roomItems.some((value) => value.includes('版权受限')) || roomPreview.includes('版权受限');
+
+  if (!hasDetailInRoomSignals && activeTrackSignals.length && !activeTrackMentionsRestriction) {
+    return {
+      stale: true,
+      reason: 'STALE_DETAIL_PAGE',
+      detailTitle,
+      roomPreview: roomSync?.bodyPreview || '',
+    };
+  }
+
+  return { stale: false, reason: null };
 }
 
 function summarizePageContext(context) {
@@ -1512,102 +1450,22 @@ function collectClusterCandidates({ searchResults, catalog, playbackHistory = []
   };
 }
 
-function isExactSongMatch(entry, query) {
-  if (!entry) return false;
-  const normalizedQuery = normalizeText(query || '');
-  if (!normalizedQuery) return false;
-  const title = normalizeText(entry.title || '');
-  const clickLabel = normalizeText(String(entry.clickLabel || '').replace(/^播放/, ''));
-  const scopeText = normalizeText(entry.scopeText || '');
-  const exactTitle = title === normalizedQuery || clickLabel === normalizedQuery;
-  const tightScoped = scopeText.includes(normalizedQuery) && normalizedQuery.length >= 2;
-  return Boolean((entry.type === 'song' || entry.sectionKind === 'song') && (exactTitle || tightScoped));
-}
-
-function candidateTypePriority(entry) {
-  const type = entry?.type || entry?.sectionKind || 'unknown';
-  if (type === 'playlist') return 4;
-  if (type === 'album') return 3;
-  if (type === 'artist') return 2;
-  if (type === 'song') return 1;
-  return 0;
-}
-
-function scoreCandidateByIntent(entry, query, exactSongMode) {
-  const haystack = normalizeText([
-    entry?.title,
-    entry?.clickLabel,
-    entry?.scopeText,
-    entry?.sectionLabel,
-    entry?.service,
-  ].filter(Boolean).join(' '));
-  const normalizedQuery = normalizeText(query || '');
-  const title = normalizeText(entry?.title || '');
-  const scopeText = normalizeText(entry?.scopeText || '');
-  const type = entry?.type || entry?.sectionKind || 'unknown';
-
-  let score = 0;
-  if (normalizedQuery && haystack.includes(normalizedQuery)) score += 20;
-  if (normalizedQuery && title === normalizedQuery) score += 50;
-  if (normalizedQuery && scopeText.includes(normalizedQuery)) score += 8;
-
-  if (exactSongMode) {
-    if (type === 'song') score += 40;
-    if (type === 'playlist') score -= 20;
-    if (type === 'album') score -= 10;
-    if (type === 'artist') score -= 5;
-  } else {
-    if (type === 'playlist') score += 40;
-    if (type === 'album') score += 10;
-    if (type === 'artist') score += 4;
-    if (type === 'song') score -= 15;
-  }
-
-  score += candidateTypePriority(entry);
-  if (entry?.recentlyPlayed) score -= 5;
-  return score;
-}
-
 function selectBestCandidate({ queryPlan, query, searchResults, catalog, playbackHistory, log }) {
   const orderedPool = collectClusterCandidates({ searchResults, catalog, playbackHistory, query });
+  const selected = orderedPool?.selected || null;
   const ranked = Array.isArray(orderedPool?.ordered) ? orderedPool.ordered : [];
-  const exactSongCandidates = ranked.filter((entry) => isExactSongMatch(entry, query));
-  const exactSongMode = exactSongCandidates.length > 0;
-  const rescored = ranked
-    .map((entry, index) => ({
-      ...entry,
-      intentScore: scoreCandidateByIntent(entry, query, exactSongMode),
-      originalOrder: index,
-    }))
-    .sort((a, b) => {
-      if (b.intentScore !== a.intentScore) return b.intentScore - a.intentScore;
-      return a.originalOrder - b.originalOrder;
-    });
-  const selected = rescored[0] || null;
 
   log({
     ok: true,
     phase: 'candidate-order',
     query,
-    strategy: exactSongMode ? 'exact-song-first' : 'fallback-playlist-first',
-    allowedTypes: exactSongMode ? ['song'] : ['playlist', 'album', 'artist', 'song'],
+    strategy: 'page-order-history-rotation',
+    allowedTypes: [],
     selected,
-    rankedTop: rescored.slice(0, 5).map((entry) => ({
-      title: entry.title,
-      type: entry.type,
-      sectionKind: entry.sectionKind,
-      targetIndex: entry.targetIndex,
-      intentScore: entry.intentScore,
-      scopeText: entry.scopeText,
-    })),
+    rankedTop: ranked.slice(0, 5),
     debug: {
-      mode: exactSongMode ? 'exact-song-first' : 'fallback-playlist-first',
+      mode: 'page-order-history-rotation',
       clusterDebug: orderedPool?.debug || null,
-      exactSongCandidates: exactSongCandidates.map((entry) => ({
-        title: entry.title,
-        type: entry.type,
-        targetIndex: entry.targetIndex ?? null,
-      })),
       recentlyPlayedSkipped: ranked.filter((entry) => entry?.recentlyPlayed).map((entry) => ({
         title: entry.title,
         targetIndex: entry.targetIndex ?? null,
@@ -1617,11 +1475,10 @@ function selectBestCandidate({ queryPlan, query, searchResults, catalog, playbac
 
   return {
     selected,
-    ranked: rescored,
+    ranked,
     debug: {
-      mode: exactSongMode ? 'exact-song-first' : 'fallback-playlist-first',
+      mode: 'page-order-history-rotation',
       clusterDebug: orderedPool?.debug || null,
-      exactSongMode,
     },
   };
 }
@@ -2141,23 +1998,20 @@ export function runMediaFlow({ runner, queryPlan, room, actionPreference, playba
 
     if (context?.pageKind === 'SEARCH_HISTORY') {
       lastFailure = { phase: 'search', code: 'SEARCH_HISTORY_PAGE', context: summarizePageContext(context) };
-      log({ ok: true, phase: 'query-rotation', query, reason: 'SEARCH_HISTORY_PAGE', strategy, allowedTypes, action: 'reuse-search-and-shrink-query' });
-      ensureSearchReady(runner, targetId, log, { forceNavigate: false });
+      log({ ok: true, phase: 'query-rotation', query, reason: 'SEARCH_HISTORY_PAGE', strategy, allowedTypes });
+      ensureSearchReady(runner, targetId, log);
       continue;
     }
     if (context?.pageKind === 'SEARCH_SHELL_DIRTY') {
       lastFailure = { phase: 'search', code: 'SEARCH_SHELL_DIRTY', context: summarizePageContext(context) };
-      log({ ok: true, phase: 'query-rotation', query, reason: 'SEARCH_SHELL_DIRTY', strategy, allowedTypes, action: 'reset-search-surface-before-next-query' });
-      ensureSearchReady(runner, targetId, log, { forceNavigate: true });
+      log({ ok: true, phase: 'query-rotation', query, reason: 'SEARCH_SHELL_DIRTY', strategy, allowedTypes });
+      ensureSearchReady(runner, targetId, log);
       continue;
     }
     if (context?.pageKind === 'SEARCH_READY' || context?.pageKind === 'UNKNOWN') {
-      const health = readSearchHealth(runner, targetId);
-      const reason = health.blankShell ? 'SEARCH_PAGE_BROKEN' : 'NO_RESULT_RENDERED';
-      const action = health.blankShell ? 'hard-reset-search-surface' : 'reuse-search-and-shrink-query';
-      lastFailure = { phase: 'search', code: reason, context: summarizePageContext(context), health: { status: health.status, blankShell: health.blankShell, hasInput: health.hasInput, bodyPreview: health.bodyPreview } };
-      log({ ok: true, phase: 'query-rotation', query, reason, strategy, allowedTypes, action, health: { status: health.status, blankShell: health.blankShell, hasInput: health.hasInput, bodyPreview: health.bodyPreview } });
-      ensureSearchReady(runner, targetId, log, { forceNavigate: health.blankShell });
+      lastFailure = { phase: 'search', code: 'NO_RESULT_RENDERED', context: summarizePageContext(context) };
+      log({ ok: true, phase: 'query-rotation', query, reason: 'NO_RESULT_RENDERED', strategy, allowedTypes });
+      ensureSearchReady(runner, targetId, log);
       continue;
     }
 
@@ -2225,7 +2079,9 @@ export function runMediaFlow({ runner, queryPlan, room, actionPreference, playba
       debug: ranking.debug?.clusterDebug || null,
     };
 
-    const rankedCandidates = (ranking.ranked || []).slice(0, maxCandidateAttempts);
+    const rankedCandidates = (ranking.ranked || [])
+      .filter((entry) => !allowedTypes.length || allowedTypes.includes(entry.type) || allowedTypes.includes(entry.sectionKind))
+      .slice(0, maxCandidateAttempts);
 
     log({
       ok: true,
@@ -2302,6 +2158,54 @@ export function runMediaFlow({ runner, queryPlan, room, actionPreference, playba
           actionPreference,
           log,
         });
+
+        const restriction = inspectCandidateRestrictions({
+          detailSignals: attempt.detailSignals,
+        });
+        if (restriction.blocked) {
+          lastFailure = {
+            phase: 'candidate-filter',
+            code: 'COPYRIGHT_RESTRICTED',
+            candidate: candidate.title,
+            data: restriction,
+          };
+          log({
+            ok: true,
+            phase: 'candidate-filter',
+            status: 'rejected',
+            candidate: candidate.title,
+            reason: restriction.reason,
+            hits: restriction.hits,
+          });
+          ensureSearchReady(runner, targetId, log);
+          search(runner, targetId, query, log);
+          continue;
+        }
+
+        const staleDetail = detectStaleDetailPage({
+          detailSignals: attempt.detailSignals,
+          roomSync,
+        });
+        if (staleDetail.stale) {
+          lastFailure = {
+            phase: 'candidate-filter',
+            code: 'STALE_DETAIL_PAGE',
+            candidate: candidate.title,
+            data: staleDetail,
+          };
+          log({
+            ok: true,
+            phase: 'candidate-filter',
+            status: 'rejected',
+            candidate: candidate.title,
+            reason: staleDetail.reason,
+            detailTitle: staleDetail.detailTitle,
+          });
+          ensureSearchReady(runner, targetId, log);
+          search(runner, targetId, query, log);
+          continue;
+        }
+
         engagement = attempt;
         selectedEntry = candidate;
         break;

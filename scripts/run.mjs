@@ -154,6 +154,10 @@ async function main() {
       followupStatus,
       preQueue,
       postQueue,
+      retryPlay: () => {
+        applyControlSteps(room, ['play']);
+        return getStatus(room);
+      },
     });
   } catch (error) {
     if (error instanceof SkillError && error.code === 'CLI_VERIFY_FAILED') {
