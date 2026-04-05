@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { analyzeIntent } from './intent.mjs';
@@ -7,7 +8,9 @@ import {
   ensureSoloRoom,
   getGroupStatus,
   getQueue,
+  getQueueJson,
   getStatus,
+  getStatusJson,
   resolveRoom,
 } from './cli-control.mjs';
 import { PurePlayBrowserRunner } from './browser-runner.mjs';
@@ -22,7 +25,54 @@ function emit(event) {
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...event }));
 }
 
+let currentRunner = null;
+let currentTargetId = null;
+let currentRoom = null;
+let currentRequest = null;
+
+function sendFailureScreenshot({ title, body, mediaPath }) {
+  if (!mediaPath) return;
+  try {
+    execFileSync(
+      'openclaw',
+      [
+        'message',
+        'send',
+        '--channel', 'telegram',
+        '--target', '1625845749',
+        '--media', mediaPath,
+        '--caption', `${title}\n\n${body}`,
+      ],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 60000,
+      }
+    );
+    emit({ ok: true, phase: 'failure-screenshot', delivered: true, mediaPath });
+  } catch (sendError) {
+    emit({
+      ok: false,
+      phase: 'failure-screenshot',
+      code: 'FAILURE_SCREENSHOT_SEND_FAILED',
+      message: String(sendError?.stderr || sendError?.stdout || sendError?.message || sendError),
+      mediaPath,
+    });
+  }
+}
+
+function tryReportFailureScreenshot(error) {
+  if (!currentRunner || !currentTargetId) return;
+  const shot = currentRunner.screenshotRoot(currentTargetId, 'e1');
+  emit({ ok: !!shot?.ok, phase: 'failure-screenshot-capture', shot, room: currentRoom, request: currentRequest });
+  if (!shot?.ok || !shot?.mediaPath) return;
+  const title = `Sonos 失败现场截图 | ${currentRoom || 'unknown room'}`;
+  const body = `request=${currentRequest || '-'} | code=${error?.code || 'UNHANDLED_ERROR'} | phase=${error?.phase || 'runtime'}。此图为当前 Sonos Web tab 顶层可见页面，用于判断失败时整页状态。`;
+  sendFailureScreenshot({ title, body, mediaPath: shot.mediaPath });
+}
+
 function fail(error) {
+  tryReportFailureScreenshot(error);
   if (error instanceof SkillError) {
     emit({ ok: false, phase: error.phase, code: error.code, message: error.message, ...error.data, final: true });
     process.exit(1);
@@ -64,6 +114,8 @@ async function main() {
   });
 
   const room = resolveRoom(roomInput);
+  currentRoom = room;
+  currentRequest = request;
   emit({ ok: true, phase: 'resolve-room', roomInput, room });
 
   const groupStatus = getGroupStatus();
@@ -123,9 +175,22 @@ async function main() {
     logger: emit,
     baseUrl: SONOS_URL,
   });
+  currentRunner = runner;
   emit({ ok: true, phase: 'mcp-profile', browserProfile });
   const playbackHistory = loadPlaybackHistory();
   emit({ ok: true, phase: 'playback-history', count: playbackHistory.length });
+
+  try {
+    currentTargetId = runner.ensureSonosTab();
+    emit({ ok: true, phase: 'failure-screenshot-preflight', targetId: currentTargetId });
+  } catch (preflightError) {
+    emit({
+      ok: false,
+      phase: 'failure-screenshot-preflight',
+      code: 'FAILURE_SCREENSHOT_PREFLIGHT_FAILED',
+      message: String(preflightError?.message || preflightError),
+    });
+  }
 
   const webResult = runMediaFlow({
     runner,
@@ -139,31 +204,38 @@ async function main() {
 
   const postStatus = getStatus(room);
   const postQueue = getQueue(room);
+  const postStatusJson = getStatusJson(room);
+  const postQueueJson = getQueueJson(room);
   await delay(4000);
   const followupStatus = getStatus(room);
+  const followupStatusJson = getStatusJson(room);
+  const followupQueueJson = getQueueJson(room);
 
+  const webRoomContext = runner.readRoomContext(webResult.targetId);
   let verification;
   try {
     verification = verifyMediaPlayback({
       room,
-      query: webResult.query,
-      selectedContent: webResult.selectedContent,
       actionName: webResult.actionName,
-      preStatus,
       postStatus,
       followupStatus,
-      preQueue,
-      postQueue,
+      followupQueueJson,
+      selectedType: webResult.selectedType || null,
+      webDetailRows: webResult?.ranking?.selected?.detailSignals?.detail?.rows || webResult?.detailSignals?.detail?.rows || [],
+      webRoomContext,
       retryPlay: () => {
-        applyControlSteps(room, ['play']);
-        return getStatus(room);
+        applyControlSteps(room, [{ kind: 'play' }]);
       },
+      retrySnapshot: () => ({
+        status: getStatus(room),
+        queueJson: getQueueJson(room),
+      }),
     });
   } catch (error) {
     if (error instanceof SkillError && error.code === 'CLI_VERIFY_FAILED') {
       error.data = {
         ...error.data,
-        webRoomContext: runner.readRoomContext(webResult.targetId),
+        webRoomContext,
       };
     }
     throw error;

@@ -405,10 +405,27 @@ function readContentContext(runner, targetId) {
       })();
 
       const detailRows = structuralDetail
-        ? [...document.querySelectorAll('[role="table"] [role="row"], table tr, [role="grid"] [role="row"]')]
-            .filter(visible)
-            .map((row) => textOf(row))
-            .filter(Boolean)
+        ? (() => {
+            const root = structuralDetail.element;
+            const tableRoot = root?.querySelector('[role="table"], [role="grid"], table');
+            const rows = tableRoot
+              ? [...tableRoot.querySelectorAll('[role="row"], tr')]
+              : [];
+            return rows
+              .filter(visible)
+              .map((row) => {
+                const cells = [...row.querySelectorAll('[role="cell"], [role="gridcell"], td')]
+                  .map((cell) => textOf(cell))
+                  .filter(Boolean);
+                const rowText = cells.length ? cells.join(' | ') : textOf(row);
+                return rowText;
+              })
+              .filter(Boolean)
+              .filter((value) => {
+                const normalized = String(value || '').replace(/\s+/g, '');
+                return normalized !== '标题时间';
+              });
+          })()
         : [];
 
       const detailActionArea = structuralDetail ? {
@@ -448,6 +465,14 @@ function readContentContext(runner, targetId) {
         url.includes('/web-app') ? 'APP_HOME' :
         'UNKNOWN';
 
+      const normalizedRoomControl = (value) => /(设置为有效|播放群组|暂停群组|群组|输出选择器|音量|客厅|工作室|卧室|厨房|书房|主卧|小房间)/.test(normalize(value));
+      const normalizedNowPlaying = (value) => /(正在播放|打开“正在播放”|随机播放|重复播放|队列|静音|音量)/.test(normalize(value));
+      const searchScopedControls = controls
+        .filter((entry) => ['search-results', 'full-results'].includes(entry.zone))
+        .filter((entry) => !normalizedRoomControl([entry.text, entry.scopeText, entry.sectionLabel].join(' ')))
+        .filter((entry) => !normalizedNowPlaying([entry.text, entry.scopeText, entry.sectionLabel].join(' ')));
+      const backgroundControls = controls.filter((entry) => ['system-controls', 'now-playing-bar'].includes(entry.zone));
+
       return {
         url,
         title,
@@ -476,6 +501,8 @@ function readContentContext(runner, targetId) {
           textSample: entry.textSample,
         })),
         controls,
+        searchScopedControls,
+        backgroundControls: backgroundControls.slice(0, 40),
         bodyPreview: bodyText.slice(0, 800),
       };
     }`
@@ -647,7 +674,7 @@ function ensureSearchReady(runner, targetId, log) {
   runner.navigate(targetId, SEARCH_URL);
 }
 
-function syncActiveRoom(runner, targetId, room, log) {
+export function syncActiveRoom(runner, targetId, room, log) {
   const maxAttempts = 4;
   let lastState = null;
   let lastClickResult = null;
@@ -671,11 +698,7 @@ function syncActiveRoom(runner, targetId, room, log) {
     };
   };
 
-  const isSoftConfirmed = (state, clickResult) => {
-    const signals = roomSignals(state);
-    if (!clickResult?.ok) return false;
-    return Boolean(signals.roomMentioned || signals.outputControlsSeen);
-  };
+  const isSoftConfirmed = () => false;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const before = runner.readRoomSyncState(targetId, room);
@@ -704,12 +727,15 @@ function syncActiveRoom(runner, targetId, room, log) {
       log({ ok: true, phase: 'active-room-sync', attempt, room, event: 'retry-before-click-state', state: retried, signals: retriedSignals });
       if (retried.activeRoomConfirmed) return retried;
       if (!retriedSignals.pageBlankish && (retriedSignals.roomMentioned || retriedSignals.buttonSeen || retriedSignals.outputControlsSeen)) {
-        return {
-          ...retried,
-          activeRoomConfirmed: true,
-          softConfirmed: true,
-          confirmSignals: [...new Set([...(retried.confirmSignals || []), 'retry-visible-signals'])],
-        };
+        log({
+          ok: true,
+          phase: 'active-room-sync',
+          attempt,
+          room,
+          event: 'retry-visible-signals-insufficient',
+          reason: 'visible room signals are not enough; require card-scoped hard confirmation before playback',
+          confirmSignals: retried.confirmSignals,
+        });
       }
     }
 
@@ -733,15 +759,10 @@ function syncActiveRoom(runner, targetId, room, log) {
         phase: 'active-room-sync',
         attempt,
         room,
-        event: 'soft-confirmed',
-        reason: 'activate click landed and target room signals remain visible; defer final truth to CLI verification',
+        event: 'soft-confirm-disabled',
+        reason: 'soft confirmation is disabled; require card-scoped hard confirmation before playback',
         confirmSignals: after.confirmSignals,
       });
-      return {
-        ...after,
-        activeRoomConfirmed: true,
-        softConfirmed: true,
-      };
     }
 
     if (afterSignals.pageBlankish && attempt < maxAttempts) {
@@ -844,7 +865,8 @@ function search(runner, targetId, query, log) {
       const contextSuccess =
         pageKind === 'SEARCH_RESULTS_MIXED' ||
         pageKind === 'SEARCH_RESULTS_PLAYLISTS' ||
-        pageKind === 'SEARCH_HISTORY';
+        pageKind === 'SEARCH_HISTORY' ||
+        pageKind === 'SEARCH_SHELL_DIRTY';
       const successSignals = {
         hasRenderedResults: pageSearchState.hasRenderedResults,
         hasPlayableButton: pageSearchState.hasPlayableButton,
@@ -882,7 +904,9 @@ function search(runner, targetId, query, log) {
 
 function extractRealSearchResults(runner, targetId) {
   const context = readContentContext(runner, targetId);
-  const controls = Array.isArray(context?.controls) ? context.controls : [];
+  const controls = Array.isArray(context?.searchScopedControls) && context.searchScopedControls.length
+    ? context.searchScopedControls
+    : Array.isArray(context?.controls) ? context.controls : [];
   const resultControls = controls.filter((entry) => ['search-results', 'full-results'].includes(entry.zone));
 
   let inheritedService = '';
@@ -969,21 +993,30 @@ function inspectCandidateRestrictions({ detailSignals }) {
 
 function detectStaleDetailPage({ detailSignals, roomSync }) {
   const detailTitle = normalizeText(detailSignals?.detail?.playlistTitle || detailSignals?.headingText || '');
+  const detailRows = Array.isArray(detailSignals?.detail?.rows) ? detailSignals.detail.rows : [];
+  const structural = detailSignals?.detail?.structural || null;
   const roomPreview = normalizeText(roomSync?.bodyPreview || '');
   const roomItems = Array.isArray(roomSync?.roomCardSamples) ? roomSync.roomCardSamples.map((value) => normalizeText(value)) : [];
+  const filteredRoomItems = roomItems.filter((value) => /(设置为有效|播放群组|暂停群组|群组|输出|音量|客厅|工作室|卧室|厨房|书房|主卧|小房间)/.test(value));
 
   if (!detailTitle) return { stale: false, reason: null };
 
-  const hasDetailInRoomSignals = roomPreview.includes(detailTitle) || roomItems.some((value) => value.includes(detailTitle));
-  const activeTrackSignals = roomItems.filter((value) => value.includes('客厅 play5') || value.includes('播放群组'));
-  const activeTrackMentionsRestriction = roomItems.some((value) => value.includes('版权受限')) || roomPreview.includes('版权受限');
+  const strongDetailEvidence = Boolean(structural?.tablePresent && detailTitle && detailRows.length > 0);
+  if (strongDetailEvidence) {
+    return { stale: false, reason: null };
+  }
 
-  if (!hasDetailInRoomSignals && activeTrackSignals.length && !activeTrackMentionsRestriction) {
+  const hasDetailInRoomSignals = roomPreview.includes(detailTitle) || filteredRoomItems.some((value) => value.includes(detailTitle));
+  const activeTrackSignals = filteredRoomItems.filter((value) => value.includes('客厅 play5') || value.includes('播放群组'));
+  const activeTrackMentionsRestriction = filteredRoomItems.some((value) => value.includes('版权受限')) || roomPreview.includes('版权受限');
+
+  if (!hasDetailInRoomSignals && activeTrackSignals.length >= 2 && !activeTrackMentionsRestriction) {
     return {
       stale: true,
       reason: 'STALE_DETAIL_PAGE',
       detailTitle,
       roomPreview: roomSync?.bodyPreview || '',
+      strongDetailEvidence: false,
     };
   }
 
@@ -1361,7 +1394,7 @@ function findClusterStartIndex(entries) {
   return firstPlayableMedia?.targetIndex ?? null;
 }
 
-function collectClusterCandidates({ searchResults, catalog, playbackHistory = [], query }) {
+function collectClusterCandidates({ searchResults, catalog, playbackHistory = [], query, allowedTypes = [] }) {
   const merged = [];
   const pushCandidate = (entry, source) => {
     if (!entry) return;
@@ -1434,10 +1467,21 @@ function collectClusterCandidates({ searchResults, catalog, playbackHistory = []
     return true;
   });
 
-  const fresh = structurallyScoped.filter((entry) => !entry.recentlyPlayed);
-  const rotationOrdered = fresh.length
-    ? [...fresh, ...structurallyScoped.filter((entry) => entry.recentlyPlayed)]
+  const normalizedAllowedTypes = Array.isArray(allowedTypes)
+    ? [...new Set(allowedTypes.filter(Boolean).map((value) => normalizeText(value)))]
+    : [];
+  const allowedScoped = normalizedAllowedTypes.length
+    ? structurallyScoped.filter((entry) => {
+        const type = normalizeText(entry.type || '');
+        const sectionKind = normalizeText(entry.sectionKind || '');
+        return normalizedAllowedTypes.includes(type) || normalizedAllowedTypes.includes(sectionKind);
+      })
     : structurallyScoped;
+
+  const fresh = allowedScoped.filter((entry) => !entry.recentlyPlayed);
+  const rotationOrdered = fresh.length
+    ? [...fresh, ...allowedScoped.filter((entry) => entry.recentlyPlayed)]
+    : allowedScoped;
   return {
     ordered: rotationOrdered,
     selected: rotationOrdered[0] || null,
@@ -1445,13 +1489,16 @@ function collectClusterCandidates({ searchResults, catalog, playbackHistory = []
       clusterStartIndex,
       rawCount: deduped.length,
       structuredCount: structurallyScoped.length,
+      allowedScopedCount: allowedScoped.length,
       freshCount: fresh.length,
+      allowedTypes: normalizedAllowedTypes,
     },
   };
 }
 
 function selectBestCandidate({ queryPlan, query, searchResults, catalog, playbackHistory, log }) {
-  const orderedPool = collectClusterCandidates({ searchResults, catalog, playbackHistory, query });
+  const allowedTypes = resolveAllowedTypes(queryPlan);
+  const orderedPool = collectClusterCandidates({ searchResults, catalog, playbackHistory, query, allowedTypes });
   const selected = orderedPool?.selected || null;
   const ranked = Array.isArray(orderedPool?.ordered) ? orderedPool.ordered : [];
 
@@ -1460,7 +1507,7 @@ function selectBestCandidate({ queryPlan, query, searchResults, catalog, playbac
     phase: 'candidate-order',
     query,
     strategy: 'page-order-history-rotation',
-    allowedTypes: [],
+    allowedTypes,
     selected,
     rankedTop: ranked.slice(0, 5),
     debug: {
@@ -2088,7 +2135,7 @@ export function runMediaFlow({ runner, queryPlan, room, actionPreference, playba
       phase: 'execution-candidate-pool',
       query,
       strategy,
-      allowedTypes: [],
+      allowedTypes,
       resultClusterConfirmed,
       selectionMode: 'page-order-history-rotation',
       clusterDebug: clusterSelection?.debug || null,
@@ -2275,6 +2322,7 @@ export function runMediaFlow({ runner, queryPlan, room, actionPreference, playba
       query,
       selectedContent: engagement.selectedContent,
       selectedType: selectedEntry?.type || ranking.selected?.type || 'unknown',
+      detailSignals: engagement.detailSignals || null,
       ranking: finalRanking,
       actionName,
       menuItems,

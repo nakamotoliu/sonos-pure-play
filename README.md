@@ -12,16 +12,16 @@ This skill is designed for **room-targeted media playback** such as:
 
 ## Status
 
-- **Current version:** `0.2.3`
+- **Current version:** `0.2.4`
 - **Delivery state:** stable enough for guided use, but not yet a zero-config public release
-- **This iteration focus:** playlist-first candidate enforcement, copyright-restricted candidate rejection, stale-detail detection, CLI play fallback, and clearer verification acceptance signals
+- **This iteration focus:** now-playing-backed room activation verification, layered DOM state reading, and stronger end-to-end playback proof for room-targeted flows
 
 What works well now:
 - room-targeted playback with explicit target room
 - grouped-room normalization (`solo`) before playback
 - search-state recovery (`close` / `back` / `home` -> re-enter search)
-- playlist-first execution can now enforce playlist-only candidate execution when the planner asks for it
-- copyright-restricted detail targets can now be rejected before playback action is issued
+- room activation verification now requires the Sonos Web `正在播放` area to switch to the target room after card activation
+- layered DOM reading separates search/detail/room-state/now-playing signals to reduce stale-shell false positives
 - CLI truth verification after web action, with a conservative `play` retry when replace-queue lands but transport does not start
 
 Known limitations:
@@ -29,29 +29,29 @@ Known limitations:
 - Sonos Web UI can still behave inconsistently depending on account/service state
 - final verification is intentionally conservative and may report failure in edge cases where Sonos changed too subtly
 
-## What changed in 0.2.3
+## What changed in 0.2.4
 
 ### Functional changes
-- Playlist-first execution now filters the final execution pool so `allowedTypes=["playlist"]` does not accidentally execute song/artist candidates that scored earlier in raw ranking.
-- Detail-page restriction scanning now checks the selected detail region and table rows for `版权受限` signals and rejects blocked candidates before menu action.
-- Added stale-detail rejection to reduce cases where old room/now-playing residue poisons the selected detail page.
-- Updated CLI verification so `替换队列` flows can issue a conservative `play` retry when transport does not reach `PLAYING` on its own.
-- Verification now returns an `acceptedBy` field to distinguish queue-proof success from weaker fallback-signal success.
+- Room activation confirmation no longer trusts card-local button disappearance alone; it now requires the Sonos Web `正在播放` area to show the target room after card activation.
+- Browser state reading was upgraded to layered DOM extraction so search results, detail state, room cards, and now-playing state can be reasoned about separately.
+- Added a dedicated room-switch regression harness (`scripts/test-room-switch-nowplaying.mjs`) that exercises bidirectional room toggles and validates them through now-playing updates.
+- End-to-end playback flow now uses the stronger room-activation proof before it proceeds with media actions.
 
 ### Why this release exists
-- Sonos Web was still selecting restricted or wrong-shape candidates for requests like `李荣浩 精选`.
-- In practice, the UI could surface a restricted album-like result ahead of a real playlist, and transport could remain stopped after queue replacement.
-- This iteration hardens the handoff between browser selection and CLI truth so the flow can skip restricted candidates and still recover playback.
+- Sonos room cards exposed misleading mixed signals: activate buttons and playback controls could coexist, so card-only confirmation was not reliable.
+- In practice, native click dispatch could switch the room correctly, but the previous confirmation logic still produced false negatives or soft-confirm loopholes.
+- This iteration moves room activation proof to the part of the UI that actually reflects the active output: the `正在播放` area.
 
 ### Validation evidence
-- Real E2E rerun for `李荣浩 精选` in `客厅` skipped the restricted `華語歌曲精選集 - 李榮浩` path.
+- A dedicated bidirectional room-switch regression (`客厅 play5` ↔ `主卧`) passed 6/6 rounds using click → poll now-playing verification.
+- Real E2E playback rerun for `播放 李荣浩 精选` in `客厅 play5` completed successfully.
 - The flow selected playlist `听李荣浩热门精选`, executed `替换队列`, and CLI verification ended in `PLAYING` with final title `不将就`.
-- Verification succeeded via `acceptedBy: fallback-signals`, which is now explicitly exposed in logs.
+- Queue verification matched the first two rows (`不将就`, `年少有为`) between web and CLI snapshots.
 
 ### Known remaining gaps
-- Raw ranking metadata can still list non-playlist candidates ahead of the final execution candidate; execution filtering now corrects that, but the ranking/debug payload is not yet fully normalized.
-- Stale detail detection is still heuristic and may need further room-agnostic cleanup.
+- Candidate ranking still does not fully prefer the most explicit playlist title for `李荣浩 精选`; execution succeeds, but selection semantics can improve.
 - Sonos Web DOM instability remains a real source of flakiness.
+- Screenshot tooling is still less reliable than structured DOM + CLI evidence.
 
 ## Required dependencies
 
