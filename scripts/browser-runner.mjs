@@ -185,7 +185,7 @@ export class PurePlayBrowserRunner {
     this.waitMs(2000);
     this.waitForLoad(tab.targetId);
     this.waitMs(3000);
-    this.log({ event: 'tab-ready', targetId: tab.targetId, url: tab.url || null });
+    this.log({ event: 'tab-ready', targetId: tab.targetId, url: tab.url || null, foregroundRequired: true, profile: this.profile });
     return tab.targetId;
   }
 

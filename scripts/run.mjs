@@ -182,7 +182,7 @@ async function main() {
 
   try {
     currentTargetId = runner.ensureSonosTab();
-    emit({ ok: true, phase: 'failure-screenshot-preflight', targetId: currentTargetId });
+    emit({ ok: true, phase: 'failure-screenshot-preflight', targetId: currentTargetId, foregroundRequired: true, browserProfile });
   } catch (preflightError) {
     emit({
       ok: false,

@@ -1001,7 +1001,12 @@ function detectStaleDetailPage({ detailSignals, roomSync }) {
 
   if (!detailTitle) return { stale: false, reason: null };
 
-  const strongDetailEvidence = Boolean(structural?.tablePresent && detailTitle && detailRows.length > 0);
+  const strongDetailEvidence = Boolean(
+    detailSignals?.isDetail &&
+    detailSignals?.hasMoreOptions &&
+    structural?.tablePresent &&
+    detailTitle
+  );
   if (strongDetailEvidence) {
     return { stale: false, reason: null };
   }
@@ -1010,7 +1015,7 @@ function detectStaleDetailPage({ detailSignals, roomSync }) {
   const activeTrackSignals = filteredRoomItems.filter((value) => value.includes('客厅 play5') || value.includes('播放群组'));
   const activeTrackMentionsRestriction = filteredRoomItems.some((value) => value.includes('版权受限')) || roomPreview.includes('版权受限');
 
-  if (!hasDetailInRoomSignals && activeTrackSignals.length >= 2 && !activeTrackMentionsRestriction) {
+  if (!detailSignals?.isDetail && !detailSignals?.hasMoreOptions && !hasDetailInRoomSignals && activeTrackSignals.length >= 2 && !activeTrackMentionsRestriction && !detailRows.length) {
     return {
       stale: true,
       reason: 'STALE_DETAIL_PAGE',
