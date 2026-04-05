@@ -31,7 +31,7 @@ export class ChromeMcpRunner {
   }
 
   oc(args, { parseJson = true } = {}) {
-    const base = ['browser', '--browser-profile', this.profile, '--json'];
+    const base = ['browser', '--json'];
     if (this.gatewayToken) base.push('--token', this.gatewayToken);
     base.push(...args);
 

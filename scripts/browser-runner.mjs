@@ -13,7 +13,7 @@ import { SEARCH_URL, SONOS_HOST } from './selectors.mjs';
 import { buildReadLayeredPageStateFn } from './dom-layers.mjs';
 
 export class PurePlayBrowserRunner {
-  constructor({ profile = 'openclaw', logger = () => {}, baseUrl = SEARCH_URL } = {}) {
+  constructor({ profile = 'user', logger = () => {}, baseUrl = SEARCH_URL } = {}) {
     this.profile = profile;
     this.logger = logger;
     this.baseUrl = baseUrl;
@@ -28,7 +28,8 @@ export class PurePlayBrowserRunner {
    */
   oc(args, { parseJson = true } = {}) {
     try {
-      const raw = execFileSync('openclaw', ['browser', '--json', ...args], {
+      const base = ['browser', '--browser-profile', this.profile, '--json', ...args];
+      const raw = execFileSync('openclaw', base, {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 60000,
@@ -529,7 +530,7 @@ export class PurePlayBrowserRunner {
     try {
       const raw = execFileSync(
         'openclaw',
-        ['browser', 'screenshot', targetId, '--ref', ref],
+        ['browser', '--browser-profile', this.profile, 'screenshot', targetId, '--ref', ref],
         {
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'pipe'],

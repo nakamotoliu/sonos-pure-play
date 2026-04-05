@@ -3,6 +3,7 @@
 Sonos playback skill for OpenClaw that uses:
 - **Sonos CLI** for room resolution, group normalization, and final truth verification
 - **OpenClaw browser runtime** for Sonos Web search, detail-page actions, and playback action clicks
+- A **visible foreground browser session** as the required execution surface for Sonos Web actions
 
 This skill is designed for **room-targeted media playback** such as:
 - play an artist in a specific room
@@ -12,46 +13,20 @@ This skill is designed for **room-targeted media playback** such as:
 
 ## Status
 
-- **Current version:** `0.2.4`
-- **Delivery state:** stable enough for guided use, but not yet a zero-config public release
-- **This iteration focus:** now-playing-backed room activation verification, layered DOM state reading, and stronger end-to-end playback proof for room-targeted flows
+Current track: **Stable enough for guided use**, but not yet a zero-config public release.
 
 What works well now:
 - room-targeted playback with explicit target room
 - grouped-room normalization (`solo`) before playback
 - search-state recovery (`close` / `back` / `home` -> re-enter search)
-- room activation verification now requires the Sonos Web `正在播放` area to switch to the target room after card activation
-- layered DOM reading separates search/detail/room-state/now-playing signals to reduce stale-shell false positives
-- CLI truth verification after web action, with a conservative `play` retry when replace-queue lands but transport does not start
+- real-result filtering for playlist / album / mood-style content
+- CLI truth verification after web action
+- automatic failure screenshot capture of the current Sonos Web tab top-level visible root and Telegram delivery for whole-tab diagnosis
 
 Known limitations:
 - `CONTROL_ONLY` path is not yet the focus of this open-source package
 - Sonos Web UI can still behave inconsistently depending on account/service state
 - final verification is intentionally conservative and may report failure in edge cases where Sonos changed too subtly
-
-## What changed in 0.2.4
-
-### Functional changes
-- Room activation confirmation no longer trusts card-local button disappearance alone; it now requires the Sonos Web `正在播放` area to show the target room after card activation.
-- Browser state reading was upgraded to layered DOM extraction so search results, detail state, room cards, and now-playing state can be reasoned about separately.
-- Added a dedicated room-switch regression harness (`scripts/test-room-switch-nowplaying.mjs`) that exercises bidirectional room toggles and validates them through now-playing updates.
-- End-to-end playback flow now uses the stronger room-activation proof before it proceeds with media actions.
-
-### Why this release exists
-- Sonos room cards exposed misleading mixed signals: activate buttons and playback controls could coexist, so card-only confirmation was not reliable.
-- In practice, native click dispatch could switch the room correctly, but the previous confirmation logic still produced false negatives or soft-confirm loopholes.
-- This iteration moves room activation proof to the part of the UI that actually reflects the active output: the `正在播放` area.
-
-### Validation evidence
-- A dedicated bidirectional room-switch regression (`客厅 play5` ↔ `主卧`) passed 6/6 rounds using click → poll now-playing verification.
-- Real E2E playback rerun for `播放 李荣浩 精选` in `客厅 play5` completed successfully.
-- The flow selected playlist `听李荣浩热门精选`, executed `替换队列`, and CLI verification ended in `PLAYING` with final title `不将就`.
-- Queue verification matched the first two rows (`不将就`, `年少有为`) between web and CLI snapshots.
-
-### Known remaining gaps
-- Candidate ranking still does not fully prefer the most explicit playlist title for `李荣浩 精选`; execution succeeds, but selection semantics can improve.
-- Sonos Web DOM instability remains a real source of flakiness.
-- Screenshot tooling is still less reliable than structured DOM + CLI evidence.
 
 ## Required dependencies
 
@@ -62,12 +37,13 @@ Known limitations:
    - Used for Sonos Web search and UI actions
 3. **Sonos CLI**
    - Used for room discovery, group status, solo normalization, queue/status verification
-4. **A logged-in Sonos Web session**
+4. **A logged-in Sonos Web session in a visible foreground browser**
    - The browser profile used by this skill must already be able to access Sonos Web
+   - The target tab/window must be user-visible and brought to the foreground during execution
 
 ### Optional
 1. **Custom browser profile override**
-   - Use `OPENCLAW_BROWSER_PROFILE` if you do not want the default profile
+   - Use `OPENCLAW_BROWSER_PROFILE` only if it still points to a visible foreground browser session
 
 ## Runtime boundaries
 
@@ -94,7 +70,7 @@ See `.env.example` for the minimal variable set.
 Most important variables:
 - `OPENCLAW_GATEWAY_TOKEN` — required if your browser RPC needs gateway auth
 - `OPENCLAW_GATEWAY_URL` — optional; defaults to local gateway when your runtime supports it
-- `OPENCLAW_BROWSER_PROFILE` — optional; defaults to `openclaw`
+- `OPENCLAW_BROWSER_PROFILE` — optional browser-profile selector for `openclaw browser` only; defaults to `user` for visible foreground execution
 
 ## Minimal run path
 
@@ -103,25 +79,30 @@ Most important variables:
 - Install Sonos CLI
 - Start the OpenClaw gateway/browser runtime
 - Make sure the chosen browser profile is already logged into Sonos Web
+- Make sure the Sonos tab can be shown in a real frontmost browser window
 
 ### 2. Configure environment
 Example:
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-export OPENCLAW_BROWSER_PROFILE="openclaw"
+export OPENCLAW_BROWSER_PROFILE="user"
 ```
+
+`OPENCLAW_BROWSER_PROFILE` only controls the browser runtime profile used by browser actions. It does not switch the OpenClaw CLI global state directory.
 
 ### 3. Self-check
 ```bash
 sonos discover
-openclaw browser tabs --browser-profile "$OPENCLAW_BROWSER_PROFILE" --json
+openclaw browser tabs
+printenv OPENCLAW_BROWSER_PROFILE
 ```
 
 You should confirm:
 - `sonos discover` returns your speakers
 - browser tabs command works
-- a Sonos Web tab can be opened or already exists
+- `OPENCLAW_BROWSER_PROFILE` matches the browser runtime profile you intend to use
+- a Sonos Web tab can be opened or already exists in that selected profile
 
 ### 4. Run
 ```bash
@@ -152,7 +133,8 @@ Typical symptom:
 Check:
 - gateway is running
 - token is correct
-- chosen browser profile is available
+- chosen browser runtime profile is available
+- you are not accidentally invoking the OpenClaw CLI with a global `--profile <name>` override
 
 ### Sonos Web is not in a clean search state
 Typical symptom:
@@ -163,6 +145,7 @@ This skill already tries:
 - back
 - home
 - re-enter search
+- bring the Sonos tab to a visible foreground browser target
 
 But if Sonos Web is badly stuck, manually refreshing the browser session may still help.
 

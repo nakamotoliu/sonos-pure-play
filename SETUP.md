@@ -17,8 +17,11 @@ Make sure:
 Example check:
 
 ```bash
-openclaw browser tabs --browser-profile openclaw --json
+openclaw browser tabs
+printenv OPENCLAW_BROWSER_PROFILE
 ```
+
+Confirm that the printed `OPENCLAW_BROWSER_PROFILE` value is the browser runtime profile you intend to use.
 
 ## 3. Log into Sonos Web
 Open Sonos Web in the browser profile you plan to use and complete login.
@@ -33,8 +36,10 @@ https://play.sonos.com/zh-cn/web-app
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-export OPENCLAW_BROWSER_PROFILE="openclaw"
+export OPENCLAW_BROWSER_PROFILE="user"
 ```
+
+`OPENCLAW_BROWSER_PROFILE` here means the browser runtime profile only. Do not use OpenClaw CLI global `--profile openclaw` for this skill.
 
 ## 5. Run a minimal smoke test
 

@@ -7,9 +7,12 @@ if (!roomA || !roomB) {
 }
 
 const rounds = Number(roundsArg) || 6;
+const browserProfile = process.env.OPENCLAW_BROWSER_PROFILE || 'user';
 const runner = new PurePlayBrowserRunner({
+  profile: browserProfile,
   logger: (entry) => console.log(JSON.stringify(entry)),
 });
+console.log(JSON.stringify({ phase: 'room-switch-nowplaying-test', event: 'profile', browserProfile }));
 const targetId = runner.ensureSonosTab();
 
 function sleep(ms) {

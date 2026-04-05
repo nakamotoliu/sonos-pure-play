@@ -7,9 +7,11 @@ description: |-
 # Sonos Pure Play Skill
 
 ## Prerequisites
-- Use the official OpenClaw-managed browser profile: `openclaw`.
+- Use a visible foreground browser session for Sonos Web automation. This skill must run against the frontmost user-facing browser window/tab, not a hidden/headless-only background browser.
+- Default browser runtime profile is `user` unless explicitly overridden for a visible foreground session.
+- `OPENCLAW_BROWSER_PROFILE` only selects the browser runtime profile for `openclaw browser ...` actions. It does **not** switch the OpenClaw CLI global state directory.
 - The bundled browser plugin must be enabled and loadable (`plugins.allow` includes `browser`, `plugins.entries.browser.enabled=true`, `browser.enabled=true`).
-- **First-time setup**: Log into Sonos Web (play.sonos.com) once in the managed `openclaw` profile. After that, the session persists in `~/.openclaw/browser/openclaw/user-data`.
+- **First-time setup**: Log into Sonos Web (play.sonos.com) once in the visible browser profile used by this skill.
 - Browser operations should go through the official OpenClaw browser runtime / CLI, not a custom CDP bridge.
 
 ## Core rule
@@ -26,7 +28,7 @@ description: |-
 - final truth verification
 
 ### Browser runtime only
-- open Sonos Web in the OpenClaw-managed browser
+- open Sonos Web in the selected visible foreground browser window/tab
 - recover search state
 - enter search text
 - inspect search results
@@ -46,6 +48,7 @@ description: |-
 8. Enter the first acceptable result, then open `更多选项`.
 9. Choose `替换队列` first when available; otherwise choose `立即播放`.
 10. Verify success with Sonos CLI truth rather than trusting page visuals alone.
+11. Before any Sonos Web action, the skill must ensure the browser target is visible and frontmost in a real user-facing window/tab. Hidden/background-only execution is not allowed.
 
 ## Current support
 - explicit target-room playback requests
