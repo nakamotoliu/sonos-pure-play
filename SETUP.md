@@ -36,7 +36,7 @@ https://play.sonos.com/zh-cn/web-app
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-export OPENCLAW_BROWSER_PROFILE="user"
+export OPENCLAW_BROWSER_PROFILE="openclaw"
 ```
 
 `OPENCLAW_BROWSER_PROFILE` here means the browser runtime profile only. Do not use OpenClaw CLI global `--profile openclaw` for this skill.

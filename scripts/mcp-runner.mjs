@@ -19,7 +19,7 @@ function readGatewayToken() {
 }
 
 export class ChromeMcpRunner {
-  constructor({ profile = 'user', logger = () => {}, baseUrl = SEARCH_URL } = {}) {
+  constructor({ profile = 'openclaw', logger = () => {}, baseUrl = SEARCH_URL } = {}) {
     this.profile = profile;
     this.logger = logger;
     this.baseUrl = baseUrl;

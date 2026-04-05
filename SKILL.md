@@ -8,7 +8,7 @@ description: |-
 
 ## Prerequisites
 - Use a visible foreground browser session for Sonos Web automation. This skill must run against the frontmost user-facing browser window/tab, not a hidden/headless-only background browser.
-- Default browser runtime profile is `user` unless explicitly overridden for a visible foreground session.
+- Default browser runtime profile is `openclaw` unless explicitly overridden for a visible foreground session.
 - `OPENCLAW_BROWSER_PROFILE` only selects the browser runtime profile for `openclaw browser ...` actions. It does **not** switch the OpenClaw CLI global state directory.
 - The bundled browser plugin must be enabled and loadable (`plugins.allow` includes `browser`, `plugins.entries.browser.enabled=true`, `browser.enabled=true`).
 - **First-time setup**: Log into Sonos Web (play.sonos.com) once in the visible browser profile used by this skill.

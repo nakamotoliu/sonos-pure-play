@@ -7,7 +7,7 @@ if (!roomA || !roomB) {
 }
 
 const rounds = Number(roundsArg) || 6;
-const browserProfile = process.env.OPENCLAW_BROWSER_PROFILE || 'user';
+const browserProfile = process.env.OPENCLAW_BROWSER_PROFILE || 'openclaw';
 const runner = new PurePlayBrowserRunner({
   profile: browserProfile,
   logger: (entry) => console.log(JSON.stringify(entry)),

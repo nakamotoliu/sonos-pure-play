@@ -13,7 +13,7 @@ import { SEARCH_URL, SONOS_HOST } from './selectors.mjs';
 import { buildReadLayeredPageStateFn } from './dom-layers.mjs';
 
 export class PurePlayBrowserRunner {
-  constructor({ profile = 'user', logger = () => {}, baseUrl = SEARCH_URL } = {}) {
+  constructor({ profile = 'openclaw', logger = () => {}, baseUrl = SEARCH_URL } = {}) {
     this.profile = profile;
     this.logger = logger;
     this.baseUrl = baseUrl;

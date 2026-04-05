@@ -70,7 +70,7 @@ See `.env.example` for the minimal variable set.
 Most important variables:
 - `OPENCLAW_GATEWAY_TOKEN` — required if your browser RPC needs gateway auth
 - `OPENCLAW_GATEWAY_URL` — optional; defaults to local gateway when your runtime supports it
-- `OPENCLAW_BROWSER_PROFILE` — optional browser-profile selector for `openclaw browser` only; defaults to `user` for visible foreground execution
+- `OPENCLAW_BROWSER_PROFILE` — optional browser-profile selector for `openclaw browser` only; defaults to `openclaw` for visible foreground execution
 
 ## Minimal run path
 
@@ -86,7 +86,7 @@ Example:
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-export OPENCLAW_BROWSER_PROFILE="user"
+export OPENCLAW_BROWSER_PROFILE="openclaw"
 ```
 
 `OPENCLAW_BROWSER_PROFILE` only controls the browser runtime profile used by browser actions. It does not switch the OpenClaw CLI global state directory.

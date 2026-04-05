@@ -92,7 +92,7 @@ async function main() {
   const request = process.argv[2] || '';
   const roomInput = process.argv[3] || '';
   const requestedMode = process.argv[4] || 'replace-first';
-  const browserProfile = process.env.OPENCLAW_BROWSER_PROFILE || 'user';
+  const browserProfile = process.env.OPENCLAW_BROWSER_PROFILE || 'openclaw';
 
   if (!request || !roomInput) {
     throw new SkillError(
