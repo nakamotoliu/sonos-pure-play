@@ -1,5 +1,5 @@
 import { normalizeText, normalizeWhitespace } from './normalize.mjs';
-import { scoreHistoryPenalty } from './playback-memory.mjs';
+import { computePlaylistPoolState, scoreHistoryPenalty } from './playback-memory.mjs';
 
 const TERM_BUCKETS = {
   genre: { weight: 12, terms: ['民谣', '爵士', '摇滚', '电子', '钢琴', '轻音乐', '纯音乐', '古典', '流行', 'R&B', 'rb', '说唱', '嘻哈', 'hiphop', 'hip-hop', '蓝调', 'jazz', 'folk', 'rock'] },
@@ -58,6 +58,8 @@ export function rankCandidates({
   originalIntent,
   query,
   requestKind = 'generic',
+  strategy = 'default',
+  allowedTypes = [],
   resultGroups,
   playbackHistory = [],
   now = new Date().toISOString(),
@@ -65,10 +67,34 @@ export function rankCandidates({
   const tokens = classifyIntent(originalIntent || query);
   const priorityKey = resolvePriorityKey(requestKind, tokens);
   const typePriority = TYPE_PRIORITIES[priorityKey] || TYPE_PRIORITIES.generic;
-  const flattened = flattenGroups(resultGroups);
+  const flattened = flattenGroups(resultGroups, allowedTypes);
+  const poolState = computePlaylistPoolState({ candidates: flattened, history: playbackHistory });
+
+  if (strategy === 'playlist-first') {
+    const playlistFirst = rankPlaylistFirstCandidates({
+      candidates: flattened,
+      playbackHistory,
+      poolState,
+      now,
+      query,
+    });
+    return {
+      selected: playlistFirst.selected,
+      ranked: playlistFirst.ranked,
+      debug: {
+        tokens,
+        targetTypePriority: ['playlist'],
+        requestKind: priorityKey,
+        allowedTypes: Array.isArray(allowedTypes) ? allowedTypes : [],
+        candidateCount: flattened.length,
+        playlistPool: poolState,
+        playlistFirst: playlistFirst.debug,
+      },
+    };
+  }
 
   const ranked = flattened
-    .map((candidate) => scoreCandidate({ candidate, query, tokens, typePriority, playbackHistory, now }))
+    .map((candidate) => scoreCandidate({ candidate, query, tokens, typePriority, playbackHistory, now, poolState }))
     .sort((a, b) => b.score - a.score);
 
   return {
@@ -80,11 +106,67 @@ export function rankCandidates({
         .sort((a, b) => b[1] - a[1])
         .map(([type]) => type),
       requestKind: priorityKey,
+      allowedTypes: Array.isArray(allowedTypes) ? allowedTypes : [],
+      candidateCount: flattened.length,
+      playlistPool: poolState,
     },
   };
 }
 
-function scoreCandidate({ candidate, query, tokens, typePriority, playbackHistory, now }) {
+function rankPlaylistFirstCandidates({ candidates, playbackHistory, poolState, now, query }) {
+  const orderedPlaylists = (Array.isArray(candidates) ? candidates : [])
+    .filter((candidate) => normalizeText(candidate.type) === 'playlist')
+    .map((candidate, index) => {
+      const title = normalizeWhitespace(candidate.title || candidate.clickLabel || '');
+      const normalizedTitle = normalizeText(title);
+      const historyPenalty = scoreHistoryPenalty({
+        candidate: { ...candidate, title },
+        history: playbackHistory,
+        now,
+        query,
+      });
+      const playedInPool = Boolean(
+        normalizedTitle &&
+        Array.isArray(poolState?.playedInPool) &&
+        poolState.playedInPool.some((entry) => normalizeText(entry) === normalizedTitle)
+      );
+      const skippedByPoolRepeat = playedInPool && !poolState?.poolExhausted;
+      return {
+        ...candidate,
+        title,
+        score: 0,
+        orderIndex: index,
+        eligible: !skippedByPoolRepeat,
+        skipReason: skippedByPoolRepeat ? 'played-in-visible-pool' : null,
+        historyReasons: historyPenalty.reasons,
+        playedInPool,
+      };
+    });
+
+  const selected = orderedPlaylists.find((candidate) => candidate.eligible) || null;
+
+  return {
+    selected,
+    ranked: orderedPlaylists,
+    debug: {
+      active: true,
+      selectedTitle: selected?.title || null,
+      poolExhausted: Boolean(poolState?.poolExhausted),
+      considered: orderedPlaylists.map((candidate) => ({
+        orderIndex: candidate.orderIndex,
+        title: candidate.title,
+        targetIndex: candidate.targetIndex ?? null,
+        source: candidate.source || null,
+        eligible: candidate.eligible,
+        skipReason: candidate.skipReason,
+        playedInPool: candidate.playedInPool,
+        historyReasons: candidate.historyReasons,
+      })),
+    },
+  };
+}
+
+function scoreCandidate({ candidate, query, tokens, typePriority, playbackHistory, now, poolState }) {
   const title = normalizeWhitespace(candidate.title || candidate.clickLabel || '');
   const haystack = normalizeText([title, candidate.scopeText, candidate.sectionLabel, candidate.service].filter(Boolean).join(' '));
   const breakdown = [];
@@ -123,6 +205,15 @@ function scoreCandidate({ candidate, query, tokens, typePriority, playbackHistor
     }
   }
 
+  const intentMatches = tokens.intent.filter((token) => haystack.includes(normalizeText(token))).length;
+  if (candidate.type === 'playlist' && tokens.intent.length && intentMatches === 0) {
+    score -= 18;
+    breakdown.push({ kind: 'query-drift', value: -18 });
+  } else if (candidate.type === 'playlist' && intentMatches > 0) {
+    score += Math.min(intentMatches * 2, 8);
+    breakdown.push({ kind: 'playlistTitleSemanticMatch', value: Math.min(intentMatches * 2, 8) });
+  }
+
   const negativePenalty = scoreNegativePenalty({ haystack, negatives: tokens.negative });
   if (negativePenalty) {
     score += negativePenalty;
@@ -139,6 +230,14 @@ function scoreCandidate({ candidate, query, tokens, typePriority, playbackHistor
   if (historyPenalty.total) {
     score += historyPenalty.total;
     breakdown.push({ kind: 'history', value: historyPenalty.total, reasons: historyPenalty.reasons });
+  }
+
+  if (candidate.type === 'playlist' && poolState && Array.isArray(poolState.playedInPool) && !poolState.poolExhausted) {
+    const normalizedTitle = normalizeText(title);
+    if (poolState.playedInPool.some((entry) => normalizeText(entry) === normalizedTitle)) {
+      score -= 200;
+      breakdown.push({ kind: 'playlist-pool-avoid', value: -200 });
+    }
   }
 
   return {
@@ -186,9 +285,15 @@ function resolvePriorityKey(requestKind, tokens) {
   return 'generic';
 }
 
-function flattenGroups(resultGroups = {}) {
+function flattenGroups(resultGroups = {}, allowedTypes = []) {
+  const normalizedAllowedTypes = new Set(
+    (Array.isArray(allowedTypes) ? allowedTypes : [])
+      .map((type) => normalizeWhitespace(type))
+      .filter(Boolean)
+  );
   return Object.entries(resultGroups)
     .flatMap(([type, entries]) => (entries || []).map((entry) => ({ ...entry, type: entry.type || type })))
+    .filter((entry) => !normalizedAllowedTypes.size || normalizedAllowedTypes.has(normalizeWhitespace(entry.type)))
     .filter((entry) => normalizeWhitespace(entry.title || entry.clickLabel));
 }
 

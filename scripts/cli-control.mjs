@@ -2,15 +2,61 @@ import { spawnSync } from 'node:child_process';
 
 import { SkillError, getQueueCount } from './normalize.mjs';
 
-function runSonos(args, phase, code) {
-  const result = spawnSync('sonos', args, { encoding: 'utf8' });
-  if (result.error) {
-    throw new SkillError(phase, code, result.error.message, { args });
+function sleepMs(ms) {
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    // intentional busy-wait; these retries are short and keep this CLI helper simple/sync
   }
-  if (result.status !== 0) {
-    throw new SkillError(phase, code, (result.stderr || 'sonos command failed').trim(), { args, exitCode: result.status });
+}
+
+function runSonos(args, phase, code, options = {}) {
+  const {
+    timeoutMs,
+    attempts = 1,
+    retryDelayMs = 0,
+    retryOn = () => true,
+  } = options;
+
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = spawnSync('sonos', args, {
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      killSignal: 'SIGKILL',
+    });
+
+    const stderr = (result.stderr || '').trim();
+    const stdout = (result.stdout || '').trim();
+
+    if (!result.error && result.status === 0) {
+      return stdout;
+    }
+
+    const message = result.error
+      ? result.error.message
+      : stderr || stdout || 'sonos command failed';
+
+    lastError = {
+      attempt,
+      args,
+      exitCode: result.status,
+      timeoutMs: timeoutMs || null,
+      stdout,
+      stderr,
+      signal: result.signal || null,
+      message,
+    };
+
+    if (attempt < attempts && retryOn(lastError)) {
+      if (retryDelayMs > 0) sleepMs(retryDelayMs * attempt);
+      continue;
+    }
+
+    throw new SkillError(phase, code, message, lastError);
   }
-  return result.stdout.trim();
+
+  throw new SkillError(phase, code, lastError?.message || 'sonos command failed', lastError || { args });
 }
 
 export function resolveRoom(roomInput) {
@@ -48,15 +94,100 @@ export function parseStatus(raw) {
 }
 
 export function getStatus(room) {
-  return parseStatus(runSonos(['status', '--name', room], 'preflight', 'SONOS_STATUS_FAILED'));
+  return parseStatus(runSonos(['status', '--name', room], 'preflight', 'SONOS_STATUS_FAILED', {
+    attempts: 3,
+    retryDelayMs: 1200,
+    retryOn: isRetryableStatusFailure,
+  }));
+}
+
+export function getStatusJson(room) {
+  const raw = runSonos(['status', '--name', room, '--format', 'json'], 'preflight', 'SONOS_STATUS_FAILED', {
+    attempts: 3,
+    retryDelayMs: 1200,
+    retryOn: isRetryableStatusFailure,
+  });
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new SkillError('preflight', 'SONOS_STATUS_JSON_PARSE_FAILED', 'Failed to parse Sonos status JSON.', {
+      room,
+      raw,
+      message: String(error?.message || error),
+    });
+  }
 }
 
 export function getQueue(room) {
-  return runSonos(['queue', 'list', '--name', room], 'preflight', 'SONOS_QUEUE_FAILED');
+  return runSonos(['queue', 'list', '--name', room], 'preflight', 'SONOS_QUEUE_FAILED', {
+    attempts: 3,
+    retryDelayMs: 1200,
+    retryOn: isRetryableStatusFailure,
+  });
+}
+
+export function getQueueJson(room, limit = 50) {
+  const raw = runSonos(['queue', 'list', '--name', room, '--format', 'json', '--limit', String(limit)], 'preflight', 'SONOS_QUEUE_FAILED', {
+    attempts: 3,
+    retryDelayMs: 1200,
+    retryOn: isRetryableStatusFailure,
+  });
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new SkillError('preflight', 'SONOS_QUEUE_JSON_PARSE_FAILED', 'Failed to parse Sonos queue JSON.', {
+      room,
+      raw,
+      message: String(error?.message || error),
+    });
+  }
+}
+
+function isRetryableGroupStatusFailure(error) {
+  const text = String([
+    error?.message,
+    error?.stderr,
+    error?.stdout,
+    error?.signal,
+  ].filter(Boolean).join('\n')).toLowerCase();
+
+  return (
+    text.includes('deadline exceeded') ||
+    text.includes('timed out') ||
+    text.includes('timeout') ||
+    text.includes('awaiting headers') ||
+    text.includes('curl fallback failed') ||
+    text.includes('zonegrouptopology') ||
+    text.includes('econnreset') ||
+    text.includes('connection reset') ||
+    text.includes('no speakers found')
+  );
+}
+
+function isRetryableStatusFailure(error) {
+  const text = String([
+    error?.message,
+    error?.stderr,
+    error?.stdout,
+    error?.signal,
+  ].filter(Boolean).join('\n')).toLowerCase();
+
+  return (
+    text.includes('no speakers found') ||
+    text.includes('timed out') ||
+    text.includes('timeout') ||
+    text.includes('deadline exceeded') ||
+    text.includes('connection reset')
+  );
 }
 
 export function getGroupStatus() {
-  return runSonos(['group', 'status'], 'preflight', 'SONOS_GROUP_STATUS_FAILED');
+  return runSonos(['group', 'status'], 'preflight', 'SONOS_GROUP_STATUS_FAILED', {
+    timeoutMs: 12000,
+    attempts: 3,
+    retryDelayMs: 1500,
+    retryOn: isRetryableGroupStatusFailure,
+  });
 }
 
 function parseGroupBlocks(groupStatus) {
