@@ -58,6 +58,28 @@ export function scoreHistoryPenalty({ candidate, history, now, query }) {
   return { total, reasons };
 }
 
+export function computePlaylistPoolState({ candidates = [], history = [] }) {
+  const playlistCandidates = (Array.isArray(candidates) ? candidates : [])
+    .filter((entry) => normalizeText(entry.type) === 'playlist')
+    .map((entry) => normalizeText(entry.title || entry.clickLabel || ''))
+    .filter(Boolean);
+  const poolTitles = new Set(playlistCandidates);
+  const playedTitles = new Set(
+    (Array.isArray(history) ? history : [])
+      .filter((entry) => normalizeText(entry.selectedType) === 'playlist')
+      .map((entry) => normalizeText(entry.selectedTitle))
+      .filter(Boolean)
+  );
+  const playedInPool = new Set([...poolTitles].filter((title) => playedTitles.has(title)));
+  const poolExhausted = poolTitles.size > 0 && playedInPool.size >= poolTitles.size;
+  return {
+    poolTitles: [...poolTitles],
+    playedInPool: [...playedInPool],
+    poolExhausted,
+    poolSize: poolTitles.size,
+  };
+}
+
 export function recordSuccessfulPlayback({
   room,
   originalIntent,
