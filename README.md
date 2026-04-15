@@ -1,134 +1,162 @@
-it is not working# Sonos Direct Control (OpenClaw Skill)
+# sonos-direct-openclaw
 
-Version: 3.0.0 (Schema-First)
+Sonos playback skill for OpenClaw.
 
-## What this skill is
-This is a schema-first Sonos skill for OpenClaw.
-It is designed to make media playback behavior reproducible across different agents and environments.
+This repository is the open-source export target for a Sonos playback workflow that combines:
+- **Sonos CLI** for room resolution, group inspection, and truth verification
+- **OpenClaw browser runtime** for Sonos Web actions
+- a **visible foreground browser session** for reliable Sonos Web operation
 
-## Core principle
-This repository is not just "local instructions that happened to work once".
-It defines a strict execution contract.
+This package is intended for users who already have:
+- OpenClaw working
+- Sonos CLI working
+- Sonos Web login available in the browser profile they plan to use
 
-## Two modes
-### 1. MEDIA_FLOW
-Use for:
-- searching songs/playlists/albums
-- artist-based playback
-- mood/theme playback
-- queue replacement
+It is **not** a zero-config consumer package.
 
-**Mandatory dependency:** PageController
+## What This Package Does
 
-### 2. CONTROL_ONLY
-Use for:
-- pause / resume
-- next / previous
-- volume / mute
-- grouping
+Typical use cases:
+- play content in a specific room
+- replace the current queue
+- play playlist / artist / mood-based content
+- run browser-assisted Sonos playback with CLI verification
 
-This mode may use Sonos CLI without PageController.
+Core rule:
 
-## Mandatory requirements
-For MEDIA_FLOW, users/agents must have:
-1. OpenClaw browser runtime
-2. PageController capability
-3. Sonos Web login available in the configured browser profile
-4. Sonos CLI installed and working
-5. Ability to verify results with Sonos CLI
+**Do not treat browser visuals alone as success. Final completion must be backed by Sonos CLI truth.**
 
-If we use PageController here, other agents must use it too.
+## Current Status
 
-## Official PageController reference
-Other agents must read this before modifying/reusing the media-flow implementation:
-- https://alibaba.github.io/page-agent/docs/advanced/page-controller
+Current status: **operator-oriented and contract-driven**
 
-Do not guess how PageController should be used.
+What is stable enough now:
+- room-targeted playback with explicit room selection
+- browser-assisted Sonos Web action flow
+- CLI-backed final verification
+- contract-first operation for media playback requests
 
-## How this skill actually uses PageController
-PageController is used for:
-1. locking the target room/output
-2. reading fresh search-result state
-3. filtering valid results and sources
-4. verifying detail-page entry
-5. opening the true action entry: `更多选项`
-6. selecting playback actions before CLI verification
+Known limitations:
+- this repo assumes Sonos Web is already logged in and usable
+- browser/runtime state still matters for success
+- verification is intentionally strict and may reject weak observable state changes
+- this package is aimed at guided operator use, not generic plug-and-play distribution
 
-It is not just a keyboard helper.
+## Execution Contract
 
-## Hard execution order
-For MEDIA_FLOW, the order is mandatory:
-1. Resolve room
-2. Lock room
-3. Verify active output
-4. Search / narrow intent
-5. Open correct detail page
-6. Open `更多选项`
-7. Choose action by priority
-8. CLI verify
+This repository follows a strict execution contract:
+- do not complete a playback request through a CLI shortcut alone
+- use Sonos CLI as final truth for room/group/playback verification
+- prefer menu-driven playback actions over unreliable direct result clicks
+- treat the final report as complete only after playback verification
 
-## Hard action entry
-The true playback-action entry is:
-- `更多选项`
+## Requirements
 
-The menu behind it contains actions like:
-- `替换当前歌单` / `替换播放列表` / `替换队列`
-- `添加到队列末尾`
-- `立即播放`
+### Required
+1. **OpenClaw**
+2. **OpenClaw browser runtime**
+3. **Sonos CLI**
+4. **A logged-in Sonos Web session in a visible foreground browser**
 
-Do not treat search-result direct `播放XXX` buttons as the primary path.
+### Additional assumptions
+- the selected browser profile can access Sonos Web
+- the Sonos tab can be brought to the foreground during execution
+- the local environment can run browser actions and Sonos CLI checks together
 
-## Hard action priority
-1. `替换当前歌单` / `替换播放列表` / `替换队列`
-2. `添加到队列末尾`
-3. `立即播放`
+## Environment and Config
 
-## Playlist-vs-track rule
-If you replace a playlist, Sonos usually starts from the playlist's first track.
+This repo currently ships:
+- `config.json.example`
+- package metadata
+- execution scripts under `scripts/`
 
-So:
-- broad artist/theme requests -> playlist replace is acceptable
-- exact-song requests -> you must target the exact track and verify current track matches
+If your runtime needs gateway auth, you may also need environment variables such as:
+- `OPENCLAW_GATEWAY_TOKEN`
+- `OPENCLAW_GATEWAY_URL`
+- browser-profile selection variables supported by your OpenClaw setup
 
-## Source reliability note
-- 网易云音乐: preferred
-- QQ音乐: allowed but can fail at runtime
+Example values shown in docs are placeholders only and must be replaced in your own local environment.
 
-If QQ errors, do not pretend success. Use a stable alternative path.
+## Run and Verify
 
-## Install
+Run path depends on the scripts in this repo.
+
+Important files:
+- `scripts/sonos-v25-run.sh`
+- `scripts/page-agent-web-flow.mjs`
+- `scripts/self-check.mjs`
+
+Verify truth with Sonos CLI, for example:
+
 ```bash
-brew install sonos
-npm install
+sonos status --name "<room>"
+sonos queue list --name "<room>"
 ```
 
-## Configure
-```bash
-cp config.json.example config.json
-```
+Only claim success if CLI confirms the expected room/content change.
 
-Adjust:
-- `default_room`
-- `browser_profile`
-- `search_url`
-- `page_agent_cdn`
+## Common Failure Modes
 
-## Verify
-```bash
-node scripts/self-check.mjs
-```
+### Browser attach/runtime problems
 
-## Run
-```bash
-bash scripts/sonos-v25-run.sh "关键词" "房间名"
-```
+Check:
+- gateway is running
+- gateway auth is correct if required
+- chosen browser profile exists
+- Sonos Web is already logged in and usable
 
-## Final truth source
-The browser is not the truth source.
-Sonos CLI is the truth source.
+### Sonos Web state is stale
 
-Use:
-- `sonos status --name "<room>"`
-- `sonos queue list --name "<room>"`
+Typical symptom:
+- stale page state blocks new search/action flow
 
-If CLI does not confirm the requested result, the action did not succeed.
+Typical recovery:
+- reopen the correct tab
+- bring the target browser window to the foreground
+- refresh or re-enter the action flow
+
+### CLI truth does not move enough
+
+Typical symptom:
+- browser action looks successful, but CLI signals do not clearly confirm the intended playback change
+
+This should be treated as failure or partial failure, not silent success.
+
+## Repository Files
+
+- `SKILL.md`
+  Agent-facing execution contract
+- `config.json.example`
+  Example local configuration
+- `scripts/sonos-v25-run.sh`
+  Primary script entry in this export repo
+- `scripts/page-agent-web-flow.mjs`
+  Browser-side helper path
+- `scripts/self-check.mjs`
+  Minimal self-check helper
+- `references/page-controller-sop.md`
+  Operational reference for the browser-assisted flow
+
+## Update Log
+
+This section is required by SOP. Every push/open-source update must append the specific change set here.
+
+### 2026-04-15
+- Tracking:
+  - workspace commits `89b874a` and `a821554`
+- Changed:
+  - updated the repository README to follow SOP-required documentation structure
+  - added explicit execution/status/requirements/verification sections
+  - added a persistent update-log section for future pushes
+  - aligned ignore rules for export-repo local artifacts
+- Added:
+  - README update-log structure
+  - ignore coverage for export-repo local log/data artifacts
+- Removed:
+  - obsolete README wording that did not match the new SOP documentation format
+- Impact:
+  - operators can now see the current contract, requirements, and verification standard in one place
+  - future export updates must record their specific changes in this README
+- Config/runtime impact:
+  - no new runtime entrypoint introduced by this documentation update
+  - no required credential value is stored in the repository
