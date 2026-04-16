@@ -1,6 +1,0 @@
-{
-  "default_room": "客厅",
-  "browser_profile": "openclaw",
-  "search_url": "https://play.sonos.com/zh-cn/search",
-  "page_agent_cdn": "https://registry.npmmirror.com/page-agent/1.5.6/files/dist/iife/page-agent.demo.js"
-}
