@@ -60,6 +60,56 @@ export function readVisibleMenuItems(runner, targetId) {
   return result?.result || result || [];
 }
 
+export function readPlaybackActionFeedback(runner, targetId, room = '') {
+  const result = evaluate(
+    runner,
+    targetId,
+    `() => {
+      const targetRoom = ${JSON.stringify(room)};
+      const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+      const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+      const textOf = (el) => normalize(el?.getAttribute?.('aria-label') || el?.textContent || '');
+      const dialog = [...document.querySelectorAll('[role="dialog"],dialog')].find(visible) || null;
+      const dialogButtons = dialog
+        ? [...dialog.querySelectorAll('button,[role="button"],[role="menuitem"],li')]
+            .filter(visible)
+            .map((el) => textOf(el))
+            .filter(Boolean)
+        : [];
+      const detailButtons = [...document.querySelectorAll('main button,[role="main"] button,main [role="button"],[role="main"] [role="button"]')]
+        .filter(visible)
+        .map((el) => textOf(el))
+        .filter(Boolean);
+      const primaryPlaybackButton = detailButtons.find((label) => /^(播放|暂停)/.test(label)) || null;
+      const nowPlayingRegion = [...document.querySelectorAll('[role="region"],section,div')]
+        .filter(visible)
+        .find((el) => textOf(el) === '正在播放' || (el.getAttribute?.('aria-label') || '') === '正在播放');
+      const nowPlayingScope = nowPlayingRegion?.parentElement || nowPlayingRegion || null;
+      const nowPlayingText = nowPlayingScope ? textOf(nowPlayingScope) : '';
+      const roomCard = targetRoom
+        ? [...document.querySelectorAll('button,[role="button"],li,article,section,div,span')]
+            .filter(visible)
+            .map((el) => el.parentElement || el)
+            .find((el) => textOf(el).includes(targetRoom) && /输出选择器|播放群组|暂停群组/.test(textOf(el)))
+        : null;
+      const roomCardText = roomCard ? textOf(roomCard) : '';
+      return {
+        url: location.href,
+        title: document.title || '',
+        dialogOpen: !!dialog,
+        dialogButtons: dialogButtons.slice(0, 10),
+        primaryPlaybackButton,
+        playbackStartedSignal: /^暂停/.test(primaryPlaybackButton || ''),
+        nowPlayingText: nowPlayingText.slice(0, 220),
+        roomMatchedInNowPlaying: !!(targetRoom && nowPlayingText.includes(targetRoom)),
+        roomCardText: roomCardText.slice(0, 220),
+        roomMatchedInSystemView: !!(targetRoom && roomCardText.includes(targetRoom)),
+      };
+    }`
+  );
+  return result?.result || result || { dialogOpen: false, dialogButtons: [] };
+}
+
 export function readRoomContext(runner, targetId) {
   const result = evaluate(
     runner,

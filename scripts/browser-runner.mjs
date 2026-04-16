@@ -35,6 +35,7 @@ import {
 } from './browser-action-tools.mjs';
 import {
   evaluate as evaluateTool,
+  readPlaybackActionFeedback as readPlaybackActionFeedbackTool,
   readPageState as readPageStateTool,
   readRoomContext as readRoomContextTool,
   readRoomSyncState as readRoomSyncStateTool,
@@ -309,6 +310,10 @@ export class PurePlayBrowserRunner {
 
   readVisibleMenuItems(targetId) {
     return readVisibleMenuItemsTool(this, targetId);
+  }
+
+  readPlaybackActionFeedback(targetId, room = '') {
+    return readPlaybackActionFeedbackTool(this, targetId, room);
   }
 
   readRoomSyncState(targetId, room) {

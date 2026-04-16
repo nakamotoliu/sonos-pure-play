@@ -91,11 +91,19 @@ The skill, not code, defines the business flow. Follow these steps in order and 
 12. Use action tools to:
    - open `更多选项` when available
    - click `替换队列` first, otherwise `立即播放`
+   - for `append-first`, prefer `添加到队列末尾`, then `替换队列`, then `立即播放`
+   - immediately reread browser feedback after the click instead of assuming success
 13. Use CLI tools and `scripts/verify.mjs` to verify final truth:
    - correct room
    - correct group state
    - playback state changed to `PLAYING` when expected
    - queue/title/track changed in a way consistent with the request
+   - before CLI verification, require at least one browser-side success signal:
+     - the action dialog closed
+     - the detail primary button changed from `播放...` to `暂停...`
+     - `正在播放` changed to the newly requested content
+     - the target room card in system view reflects the new content
+   - if none of those signals appear, reread once after a short wait and then fail instead of drifting silently
 
 ## Runtime Recovery Rules
 - Recovery is allowed only inside the fixed flow above.

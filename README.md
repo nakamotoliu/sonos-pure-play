@@ -59,6 +59,7 @@ The execution report should include at least:
 - chosen candidate score
 - deviation
 - decision reason
+- browser action feedback
 - playback verify result
 
 Score notes:
@@ -84,6 +85,19 @@ Score notes:
 - enter detail page
 - open `更多选项`
 - click `替换队列` or `立即播放`
+- reread browser state after the action click and confirm a visible success signal before trusting the action
+
+## Browser Action Feedback
+
+After clicking `替换队列`, `立即播放`, or `添加到队列末尾`, do not assume the action worked just because the click call returned.
+
+At least one browser-side success signal should appear before the flow proceeds to final CLI verification:
+- the action dialog closes
+- the detail-page primary button changes from `播放...` to `暂停...`
+- the `正在播放` region updates to the requested content
+- the target room card in system view updates to the requested content
+
+If none of those signals appear, the flow should reread after a short wait and treat the action as unconfirmed rather than silently continuing.
 
 ## Requirements
 
