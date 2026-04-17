@@ -258,6 +258,23 @@ Out of scope:
 
 This section is required by SOP. Every push/open-source update must append the specific change set here.
 
+### 2026-04-17
+- Tracking: export push prep on `main`
+- Changed:
+  - restored layered query-gate helpers and tests so search confirmation is not reduced to input-value retention alone
+  - made browser action feedback fallback conservative when dialog state cannot be read
+- Added:
+  - `scripts/search-input-ops.test.mjs`
+- Removed:
+  - none in this update
+- Impact:
+  - reduces risk of accepting stale Sonos search layers as a valid new search
+  - avoids treating missing browser-action feedback as an implicit playback-action success
+- Config/runtime impact:
+  - no new required environment variables
+  - no entrypoint change
+  - verification becomes stricter when browser feedback is unavailable
+
 ### 2026-04-15
 - Tracking: workspace commit `89b874a`
 - Changed:

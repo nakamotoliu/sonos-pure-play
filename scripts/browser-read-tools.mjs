@@ -107,7 +107,18 @@ export function readPlaybackActionFeedback(runner, targetId, room = '') {
       };
     }`
   );
-  return result?.result || result || { dialogOpen: false, dialogButtons: [] };
+  return result?.result || result || {
+    dialogOpen: false,
+    dialogClosed: false,
+    dialogButtons: [],
+    primaryPlaybackButton: null,
+    playbackStartedSignal: false,
+    nowPlayingText: '',
+    roomMatchedInNowPlaying: false,
+    roomCardText: '',
+    roomMatchedInSystemView: false,
+    reason: 'feedback-unavailable',
+  };
 }
 
 export function readRoomContext(runner, targetId) {

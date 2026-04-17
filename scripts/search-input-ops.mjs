@@ -1,4 +1,6 @@
-import { normalizeWhitespace, SkillError } from './normalize.mjs';
+import { normalizeText, normalizeWhitespace, SkillError } from './normalize.mjs';
+import { buildDetectSearchPageStateFn } from './search-page-state.mjs';
+import { SEARCH_URL } from './selectors.mjs';
 
 function buildFindVisibleSearchInputFn(requestedLabel = '') {
   return `() => {
@@ -124,4 +126,95 @@ export function ensureSearchValue(runner, targetId, query, options = {}) {
     });
   }
   return attempt;
+}
+
+export function assessQueryGateState(state = {}, query = '') {
+  const normalizedQuery = normalizeText(query);
+  const normalizedValue = normalizeText(state?.searchValue || '');
+  const queryApplied = Boolean(
+    normalizedQuery &&
+    (state?.queryApplied || normalizedValue === normalizedQuery)
+  );
+  const ok = Boolean(state?.searchPageReady && queryApplied);
+  return {
+    ok,
+    searchPageReady: Boolean(state?.searchPageReady),
+    queryApplied,
+    pageKind: state?.pageKind || 'UNKNOWN',
+    searchValue: normalizeWhitespace(state?.searchValue || ''),
+    historyVisible: Boolean(state?.historyVisible),
+    visibleSearchBoxCount: Number(state?.visibleSearchBoxCount || 0),
+    activeElementRole: state?.activeElementRole || '',
+    activeElementTag: state?.activeElementTag || '',
+  };
+}
+
+export function checkSearchQueryApplied(runner, targetId, query) {
+  const result = runner.evaluate(targetId, buildDetectSearchPageStateFn({ expectedQuery: query }));
+  const state = result?.result || result || {};
+  return {
+    ...assessQueryGateState(state, query),
+    state,
+  };
+}
+
+export function ensureQueryGate(runner, targetId, query, options = {}) {
+  const {
+    label = '搜索',
+    triggerTrailingSpace = true,
+    submit = true,
+    inputAttempts = 2,
+    pageReloads = 1,
+    settleMs = 450,
+    reloadSettleMs = 1200,
+  } = options;
+
+  const attempts = [];
+
+  for (let reloadIndex = 0; reloadIndex <= pageReloads; reloadIndex += 1) {
+    if (reloadIndex > 0) {
+      runner.navigate(targetId, SEARCH_URL);
+      runner.waitForLoad(targetId);
+      runner.waitMs(reloadSettleMs);
+    }
+
+    for (let inputIndex = 0; inputIndex < inputAttempts; inputIndex += 1) {
+      const write = replaceVisibleSearchValue(runner, targetId, query, {
+        label,
+        submit,
+        triggerTrailingSpace,
+      });
+      runner.waitMs(settleMs);
+      const gate = checkSearchQueryApplied(runner, targetId, query);
+      const attempt = { reloadIndex, inputIndex, write, gate };
+      attempts.push(attempt);
+      if (gate.ok) {
+        return {
+          ok: true,
+          query: normalizeWhitespace(query),
+          attempt,
+          attempts,
+        };
+      }
+    }
+  }
+
+  throw new SkillError(
+    'query-gate',
+    'QUERY_NOT_CONFIRMED',
+    'Search query was not confirmed in the visible Sonos search input after the allowed retries.',
+    {
+      query: normalizeWhitespace(query),
+      attempts,
+      options: {
+        label,
+        triggerTrailingSpace,
+        submit,
+        inputAttempts,
+        pageReloads,
+        settleMs,
+        reloadSettleMs,
+      },
+    }
+  );
 }
