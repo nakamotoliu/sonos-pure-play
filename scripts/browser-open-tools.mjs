@@ -30,7 +30,7 @@ export function start(runner) {
 }
 
 export function ensureSonosTab(runner) {
-  runner.log({ event: 'ensure-sonos-tab-start', profile: runner.profile });
+  runner.log({ event: 'ensure-sonos-tab-start', profile: runner.profile, interactionMode: runner.interactionMode() });
   start(runner);
   runner.log({ event: 'ensure-sonos-tab-after-start' });
 
@@ -80,14 +80,23 @@ export function ensureSonosTab(runner) {
     throw new SkillError(
       'browser-open',
       'SONOS_WEB_NOT_READY',
-      'Unable to find or open the Sonos Web App in Chrome.'
+      'Unable to find or open the Sonos Web App in the configured OpenClaw browser profile.'
     );
   }
 
   const tabUrl = String(tab.url || '');
-  runner.log({ event: 'ensure-sonos-tab-before-focus', targetId: tab.targetId, url: tabUrl || null });
-  focus(runner, tab.targetId);
-  runner.log({ event: 'ensure-sonos-tab-after-focus', targetId: tab.targetId });
+  if (runner.requiresForeground()) {
+    runner.log({ event: 'ensure-sonos-tab-before-focus', targetId: tab.targetId, url: tabUrl || null });
+    focus(runner, tab.targetId);
+    runner.log({ event: 'ensure-sonos-tab-after-focus', targetId: tab.targetId });
+  } else {
+    runner.log({
+      event: 'ensure-sonos-tab-skip-focus',
+      targetId: tab.targetId,
+      url: tabUrl || null,
+      interactionMode: runner.interactionMode(),
+    });
+  }
 
   if (tabUrl.includes('/search')) {
     waitMs(runner, 80);
@@ -95,7 +104,8 @@ export function ensureSonosTab(runner) {
       event: 'tab-ready-fast-path',
       targetId: tab.targetId,
       url: tabUrl,
-      foregroundRequired: true,
+      foregroundRequired: runner.requiresForeground(),
+      interactionMode: runner.interactionMode(),
       profile: runner.profile,
       preservedExistingPage: true,
     });
@@ -111,7 +121,8 @@ export function ensureSonosTab(runner) {
     event: 'tab-ready',
     targetId: tab.targetId,
     url: tabUrl || null,
-    foregroundRequired: true,
+    foregroundRequired: runner.requiresForeground(),
+    interactionMode: runner.interactionMode(),
     profile: runner.profile,
     preservedExistingPage: true,
   });

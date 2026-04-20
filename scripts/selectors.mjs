@@ -7,6 +7,6 @@ export const DEFAULT_ACTION = 'replace-first';
 
 export const ACTION_PRIORITY = {
   'replace-first': ['替换队列', '立即播放'],
-  'append-first': ['添加到队列末尾', '替换队列', '立即播放'],
+  'append-first': ['替换队列', '立即播放'],
   'play-now': ['立即播放'],
 };

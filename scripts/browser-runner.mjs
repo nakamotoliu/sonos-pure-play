@@ -28,14 +28,15 @@ import {
   click as clickTool,
   clickButtonByLabel as clickButtonByLabelTool,
   clickRoomActivate as clickRoomActivateTool,
+  choosePlaybackAction as choosePlaybackActionTool,
   fillRef as fillRefTool,
+  openPlaybackActionMenu as openPlaybackActionMenuTool,
   press as pressTool,
   type as typeTool,
   typeRef as typeRefTool,
 } from './browser-action-tools.mjs';
 import {
   evaluate as evaluateTool,
-  readPlaybackActionFeedback as readPlaybackActionFeedbackTool,
   readPageState as readPageStateTool,
   readRoomContext as readRoomContextTool,
   readRoomSyncState as readRoomSyncStateTool,
@@ -47,15 +48,111 @@ import {
 import { extractUsablePageBlocks as extractUsablePageBlocksTool } from './browser-surface-tools.mjs';
 
 const DEFAULT_GATEWAY_PORT = '18789';
+const DEFAULT_OPENCLAW_CONFIG_PATH = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+const DEFAULT_SONOS_BROWSER_PROFILE = 'openclaw-headless';
+
+function readOpenClawConfig(configPath = DEFAULT_OPENCLAW_CONFIG_PATH) {
+  try {
+    return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function parseBooleanFlag(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
 
 function readGatewayPort() {
   if (process.env.OPENCLAW_GATEWAY_PORT) return String(process.env.OPENCLAW_GATEWAY_PORT);
   try {
-    const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const config = readOpenClawConfig();
     return String(config?.gateway?.port || DEFAULT_GATEWAY_PORT);
   } catch {
     return DEFAULT_GATEWAY_PORT;
+  }
+}
+
+function resolveBrowserHeadlessSettings({
+  env = process.env,
+  configPath = DEFAULT_OPENCLAW_CONFIG_PATH,
+  profile = env.OPENCLAW_BROWSER_PROFILE || DEFAULT_SONOS_BROWSER_PROFILE,
+} = {}) {
+  const envOverride = parseBooleanFlag(env.OPENCLAW_BROWSER_HEADLESS);
+  const config = readOpenClawConfig(configPath);
+  const profileHeadless = config?.browser?.profiles?.[profile]?.headless;
+
+  if (envOverride !== null) {
+    return {
+      enabled: envOverride,
+      source: 'env',
+      config,
+    };
+  }
+
+  if (typeof profileHeadless === 'boolean') {
+    return {
+      enabled: profileHeadless,
+      source: 'profile-config',
+      config,
+    };
+  }
+
+  if (profile === DEFAULT_SONOS_BROWSER_PROFILE) {
+    return {
+      enabled: true,
+      source: 'default-profile-fallback',
+      config,
+    };
+  }
+
+  return {
+    enabled: config?.browser?.headless === true,
+    source: 'global-config',
+    config,
+  };
+}
+
+export function resolveBrowserHeadlessMode(options = {}) {
+  return resolveBrowserHeadlessSettings(options).enabled;
+}
+
+export function shouldUseTemporaryGlobalHeadlessConfig(options = {}) {
+  const settings = resolveBrowserHeadlessSettings(options);
+  return settings.enabled && settings.source === 'default-profile-fallback';
+}
+
+function writeOpenClawConfig(config, configPath = DEFAULT_OPENCLAW_CONFIG_PATH) {
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+function withTemporaryHeadlessConfig({
+  enabled,
+  configPath = DEFAULT_OPENCLAW_CONFIG_PATH,
+  fn,
+}) {
+  if (!enabled) return fn();
+  const config = readOpenClawConfig(configPath);
+  if (!config || config?.browser?.headless === true) return fn();
+
+  const nextConfig = {
+    ...config,
+    browser: {
+      ...(config.browser || {}),
+      headless: true,
+    },
+  };
+
+  writeOpenClawConfig(nextConfig, configPath);
+  try {
+    return fn();
+  } finally {
+    writeOpenClawConfig(config, configPath);
   }
 }
 
@@ -87,16 +184,29 @@ export function summarizeBrowserAttachError(message) {
 }
 
 export class PurePlayBrowserRunner {
-  constructor({ profile = 'openclaw', logger = () => {}, baseUrl = SEARCH_URL } = {}) {
+  constructor({ profile = process.env.OPENCLAW_BROWSER_PROFILE || DEFAULT_SONOS_BROWSER_PROFILE, logger = () => {}, baseUrl = SEARCH_URL } = {}) {
     this.profile = profile;
     this.logger = logger;
     this.baseUrl = baseUrl;
     this.gatewayPort = readGatewayPort();
     this.gatewayHealthUrl = `http://127.0.0.1:${this.gatewayPort}/health`;
+    this.headless = resolveBrowserHeadlessMode({ profile: this.profile });
+    this.temporaryGlobalHeadlessConfig = shouldUseTemporaryGlobalHeadlessConfig({
+      profile: this.profile,
+    });
+    this.configPath = DEFAULT_OPENCLAW_CONFIG_PATH;
   }
 
   log(event) {
     this.logger({ ok: true, phase: 'browser-runner', ...event });
+  }
+
+  interactionMode() {
+    return this.headless ? 'headless' : 'foreground';
+  }
+
+  requiresForeground() {
+    return !this.headless;
   }
 
   /**
@@ -112,10 +222,15 @@ export class PurePlayBrowserRunner {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        const raw = execFileSync('openclaw', base, {
+        const runCommand = () => execFileSync('openclaw', base, {
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'pipe'],
           timeout: 60000,
+        });
+        const raw = withTemporaryHeadlessConfig({
+          enabled: args[0] === 'start' && this.temporaryGlobalHeadlessConfig,
+          configPath: this.configPath,
+          fn: runCommand,
         });
         if (!parseJson) return raw;
         const trimmed = String(raw || '').trim();
@@ -280,6 +395,14 @@ export class PurePlayBrowserRunner {
     return clickButtonByLabelTool(this, targetId, labels);
   }
 
+  openPlaybackActionMenu(targetId, options = {}) {
+    return openPlaybackActionMenuTool(this, targetId, options);
+  }
+
+  choosePlaybackAction(targetId, labels = ['替换队列', '立即播放'], options = {}) {
+    return choosePlaybackActionTool(this, targetId, labels, options);
+  }
+
   snapshot(targetId, limit = 260) {
     const shot = snapshotTool(this, targetId, limit);
     if (!shot?.ok || !Array.isArray(shot.nodes)) {
@@ -310,10 +433,6 @@ export class PurePlayBrowserRunner {
 
   readVisibleMenuItems(targetId) {
     return readVisibleMenuItemsTool(this, targetId);
-  }
-
-  readPlaybackActionFeedback(targetId, room = '') {
-    return readPlaybackActionFeedbackTool(this, targetId, room);
   }
 
   readRoomSyncState(targetId, room) {

@@ -1,5 +1,7 @@
 import { normalizeWhitespace } from './normalize.mjs';
 
+export const MAX_PLAYBACK_ATTEMPTS = 3;
+
 const LEADING_INTENT_PREFIX = /^(请|麻烦|帮我|给我|让我|想听|我想听|我想要|我要|在[^ ]+?(播放|放|搜|搜索|找)|在[^ ]+?听|替我|帮忙)?/;
 const LEADING_ACTION_PREFIX = /^(播放|放一下|放一首|放点|放|搜一下|搜索一下|搜索|搜|找一下|找|听一下|听|来一首|来点|来点儿|来首|来个|整点)/;
 const TRAILING_FILLERS = /(吧|一下|一点|一些|谢谢|好吗|可以吗)$/g;
@@ -73,7 +75,7 @@ export function buildQueryPlan({ request }) {
     priorityTerms,
     viewAllTokens: buildViewAllTokens({ originalIntent, requestKind, priorityTerms }),
     minCandidateScore: shortQuery ? 10 : 12,
-    maxCandidateAttemptsPerQuery: strategy === 'playlist-first' ? 2 : 1,
+    maxCandidateAttemptsPerQuery: MAX_PLAYBACK_ATTEMPTS,
   };
   const flowHints = {
     preferredSection: strategy === 'playlist-first' ? 'playlist' : null,

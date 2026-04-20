@@ -80,7 +80,7 @@ export function computePlaylistPoolState({ candidates = [], history = [] }) {
   };
 }
 
-export function recordSuccessfulPlayback({
+export function recordPlaybackSelection({
   room,
   originalIntent,
   queryUsed,
@@ -111,5 +111,7 @@ export function recordSuccessfulPlayback({
   fs.writeFileSync(historyPath, JSON.stringify({ version: 1, entries: next }, null, 2) + '\n', 'utf8');
   return entry;
 }
+
+export const recordSuccessfulPlayback = recordPlaybackSelection;
 
 export const HISTORY_PATH = DEFAULT_HISTORY_PATH;

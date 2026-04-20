@@ -1,5 +1,18 @@
 import { normalizeText, normalizeWhitespace, SkillError } from './normalize.mjs';
 
+export const MAX_PLAYBACK_ATTEMPTS = 3;
+
+function buildRetryMeta(reason, retryable) {
+  return {
+    retryable: Boolean(retryable),
+    retryReason: reason || null,
+  };
+}
+
+export function isRetryablePlaybackVerificationFailure(error) {
+  return Boolean(error?.phase === 'verify-cli' && error?.data?.retryable);
+}
+
 function groupIncludesRoom(group, room) {
   if (!group) return true;
   return String(group).toLowerCase().includes(String(room).toLowerCase());
@@ -34,6 +47,7 @@ export function verifyMediaPlayback({
     throw new SkillError('verify-cli', 'CLI_VERIFY_FAILED', 'Target room is not present in the Sonos CLI group reported after playback.', {
       room,
       group: postStatus.group || null,
+      ...buildRetryMeta('group-mismatch', false),
     });
   }
 
@@ -53,6 +67,7 @@ export function verifyMediaPlayback({
       finalState: effectiveStatus?.state || null,
       finalTitle: effectiveStatus?.title || null,
       finalTrack: effectiveStatus?.track || null,
+      ...buildRetryMeta('not-playing-after-action', true),
     });
   }
 
@@ -84,6 +99,7 @@ export function verifyMediaPlayback({
       finalTrack: finalTrack || null,
       selectedContent: selectedContent || null,
       originalIntent: originalIntent || null,
+      ...buildRetryMeta('playing-without-content-match', true),
     });
   }
 

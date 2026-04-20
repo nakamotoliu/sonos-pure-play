@@ -20,7 +20,7 @@ const TYPE_PRIORITIES = {
   artist: { artist: 30, playlist: 12, album: 6, song: 0 },
   song: { song: 30, album: 10, artist: 4, playlist: -5 },
   album: { album: 30, song: 10, artist: 4, playlist: 0 },
-  generic: { playlist: 20, album: 12, song: 6, artist: 0 },
+  generic: { playlist: 32, album: 8, song: 2, artist: -2 },
 };
 
 const CONFLICT_TERMS = {
@@ -130,20 +130,28 @@ function rankPlaylistFirstCandidates({ candidates, playbackHistory, poolState, n
         Array.isArray(poolState?.playedInPool) &&
         poolState.playedInPool.some((entry) => normalizeText(entry) === normalizedTitle)
       );
-      const skippedByPoolRepeat = playedInPool && !poolState?.poolExhausted;
+      const historyScore = historyPenalty.total;
       return {
         ...candidate,
         title,
-        score: 0,
+        score: historyScore - index * 0.01,
         orderIndex: index,
-        eligible: !skippedByPoolRepeat,
-        skipReason: skippedByPoolRepeat ? 'played-in-visible-pool' : null,
+        eligible: !playedInPool,
+        skipReason: playedInPool ? 'played-in-visible-pool' : null,
+        historyScore,
         historyReasons: historyPenalty.reasons,
         playedInPool,
       };
+    })
+    .sort((left, right) => {
+      if (left.eligible !== right.eligible) return left.eligible ? -1 : 1;
+      if (right.score !== left.score) return right.score - left.score;
+      return left.orderIndex - right.orderIndex;
     });
 
-  const selected = orderedPlaylists.find((candidate) => candidate.eligible) || null;
+  const selected = orderedPlaylists.find((candidate) => candidate.eligible)
+    || orderedPlaylists[0]
+    || null;
 
   return {
     selected,
@@ -160,6 +168,7 @@ function rankPlaylistFirstCandidates({ candidates, playbackHistory, poolState, n
         eligible: candidate.eligible,
         skipReason: candidate.skipReason,
         playedInPool: candidate.playedInPool,
+        historyScore: candidate.historyScore,
         historyReasons: candidate.historyReasons,
       })),
     },
