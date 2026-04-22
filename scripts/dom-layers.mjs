@@ -58,14 +58,20 @@ export function buildReadLayeredPageStateFn() {
       .filter(Boolean)
       .filter((text) => !/设置为有效|播放群组|暂停群组|输出选择器|正在播放|打开“正在播放”|音量/.test(text));
 
-    const appError = /出错了|稍后重试|Something went wrong/i.test(textOf(main));
-    const bootstrapBlank = !textOf(main) && roomCards.length === 0 && detail.length === 0;
+    const pageText = textOf(main);
+    const appError = /出错了|稍后重试|Something went wrong/i.test(pageText);
+    const bootstrapBlank = !pageText && roomCards.length === 0 && detail.length === 0;
+    const loginBlocked = /登录|sign in|邮箱|电子邮件|密码/i.test(pageText)
+      && !/搜索|你的系统|your system|sonos radio|浏览/i.test(pageText);
+    const challengeRequired = /验证码|验证你的身份|two-factor|two factor|otp|verification code|check your email/i.test(pageText);
 
     return {
       url: location.href,
       title: document.title || '',
       appError,
       bootstrapBlank,
+      loginBlocked,
+      challengeRequired,
       layers: {
         search: searchNodes.slice(0, 120),
         roomCards: roomCards.slice(0, 8),

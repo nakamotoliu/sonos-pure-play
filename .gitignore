@@ -1,3 +1,6 @@
-.DS_Store
 logs/
 data/*.json
+secrets/
+!secrets/*.example
+*.local.json
+scripts/*.local.mjs

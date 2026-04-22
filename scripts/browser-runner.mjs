@@ -7,10 +7,11 @@
  * API surface is kept compatible for the remaining browser tool consumers.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { SkillError } from './normalize.mjs';
 import { SEARCH_URL } from './selectors.mjs';
@@ -49,7 +50,8 @@ import { extractUsablePageBlocks as extractUsablePageBlocksTool } from './browse
 
 const DEFAULT_GATEWAY_PORT = '18789';
 const DEFAULT_OPENCLAW_CONFIG_PATH = path.join(os.homedir(), '.openclaw', 'openclaw.json');
-const DEFAULT_SONOS_BROWSER_PROFILE = 'openclaw-headless';
+const DEFAULT_SONOS_BROWSER_PROFILE = 'openclaw';
+const LOGIN_RECOVERY_SENTINEL = '__SONOS_LOGIN_RECOVERY_ACTIVE__';
 
 function readOpenClawConfig(configPath = DEFAULT_OPENCLAW_CONFIG_PATH) {
   try {
@@ -57,6 +59,67 @@ function readOpenClawConfig(configPath = DEFAULT_OPENCLAW_CONFIG_PATH) {
   } catch {
     return null;
   }
+}
+
+export function inspectBrowserProfileSetup({
+  env = process.env,
+  configPath = DEFAULT_OPENCLAW_CONFIG_PATH,
+  profile = env.OPENCLAW_BROWSER_PROFILE || DEFAULT_SONOS_BROWSER_PROFILE,
+} = {}) {
+  const config = readOpenClawConfig(configPath);
+  const configuredProfile = config?.browser?.profiles?.[profile] || null;
+
+  return {
+    profile,
+    configPath,
+    config,
+    configExists: !!config,
+    browserEnabled: config?.browser?.enabled !== false,
+    profileExists: !!configuredProfile,
+    profileConfig: configuredProfile,
+  };
+}
+
+export function assertBrowserProfileSetup(options = {}) {
+  const setup = inspectBrowserProfileSetup(options);
+
+  if (!setup.configExists) {
+    throw new SkillError(
+      'preflight',
+      'OPENCLAW_CONFIG_NOT_FOUND',
+      `OpenClaw config is missing or unreadable at ${setup.configPath}. Create browser.profiles.${setup.profile} before running this Sonos skill.`,
+      {
+        profile: setup.profile,
+        configPath: setup.configPath,
+      }
+    );
+  }
+
+  if (!setup.browserEnabled) {
+    throw new SkillError(
+      'preflight',
+      'OPENCLAW_BROWSER_DISABLED',
+      'OpenClaw browser runtime is disabled in config. Enable browser support before running this Sonos skill.',
+      {
+        profile: setup.profile,
+        configPath: setup.configPath,
+      }
+    );
+  }
+
+  if (!setup.profileExists) {
+    throw new SkillError(
+      'preflight',
+      'BROWSER_PROFILE_NOT_CONFIGURED',
+      `Browser profile "${setup.profile}" is not configured in ${setup.configPath}. Create browser.profiles.${setup.profile} before running this Sonos skill.`,
+      {
+        profile: setup.profile,
+        configPath: setup.configPath,
+      }
+    );
+  }
+
+  return setup;
 }
 
 function parseBooleanFlag(value) {
@@ -103,14 +166,6 @@ function resolveBrowserHeadlessSettings({
     };
   }
 
-  if (profile === DEFAULT_SONOS_BROWSER_PROFILE) {
-    return {
-      enabled: true,
-      source: 'default-profile-fallback',
-      config,
-    };
-  }
-
   return {
     enabled: config?.browser?.headless === true,
     source: 'global-config',
@@ -120,40 +175,6 @@ function resolveBrowserHeadlessSettings({
 
 export function resolveBrowserHeadlessMode(options = {}) {
   return resolveBrowserHeadlessSettings(options).enabled;
-}
-
-export function shouldUseTemporaryGlobalHeadlessConfig(options = {}) {
-  const settings = resolveBrowserHeadlessSettings(options);
-  return settings.enabled && settings.source === 'default-profile-fallback';
-}
-
-function writeOpenClawConfig(config, configPath = DEFAULT_OPENCLAW_CONFIG_PATH) {
-  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-}
-
-function withTemporaryHeadlessConfig({
-  enabled,
-  configPath = DEFAULT_OPENCLAW_CONFIG_PATH,
-  fn,
-}) {
-  if (!enabled) return fn();
-  const config = readOpenClawConfig(configPath);
-  if (!config || config?.browser?.headless === true) return fn();
-
-  const nextConfig = {
-    ...config,
-    browser: {
-      ...(config.browser || {}),
-      headless: true,
-    },
-  };
-
-  writeOpenClawConfig(nextConfig, configPath);
-  try {
-    return fn();
-  } finally {
-    writeOpenClawConfig(config, configPath);
-  }
 }
 
 export function isRetryableBrowserAttachError(message) {
@@ -183,6 +204,10 @@ export function summarizeBrowserAttachError(message) {
   return '';
 }
 
+function localLoginHelperExists() {
+  return fs.existsSync(LOCAL_LOGIN_HELPER);
+}
+
 export class PurePlayBrowserRunner {
   constructor({ profile = process.env.OPENCLAW_BROWSER_PROFILE || DEFAULT_SONOS_BROWSER_PROFILE, logger = () => {}, baseUrl = SEARCH_URL } = {}) {
     this.profile = profile;
@@ -190,10 +215,8 @@ export class PurePlayBrowserRunner {
     this.baseUrl = baseUrl;
     this.gatewayPort = readGatewayPort();
     this.gatewayHealthUrl = `http://127.0.0.1:${this.gatewayPort}/health`;
+    this.profileSetup = assertBrowserProfileSetup({ profile: this.profile });
     this.headless = resolveBrowserHeadlessMode({ profile: this.profile });
-    this.temporaryGlobalHeadlessConfig = shouldUseTemporaryGlobalHeadlessConfig({
-      profile: this.profile,
-    });
     this.configPath = DEFAULT_OPENCLAW_CONFIG_PATH;
   }
 
@@ -222,15 +245,10 @@ export class PurePlayBrowserRunner {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        const runCommand = () => execFileSync('openclaw', base, {
+        const raw = execFileSync('openclaw', base, {
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'pipe'],
           timeout: 60000,
-        });
-        const raw = withTemporaryHeadlessConfig({
-          enabled: args[0] === 'start' && this.temporaryGlobalHeadlessConfig,
-          configPath: this.configPath,
-          fn: runCommand,
         });
         if (!parseJson) return raw;
         const trimmed = String(raw || '').trim();
@@ -287,6 +305,87 @@ export class PurePlayBrowserRunner {
       profile: this.profile,
       gatewayHealthUrl: this.gatewayHealthUrl,
     });
+  }
+
+  runLocalLoginHelper() {
+    if (!localLoginHelperExists()) {
+      return { ok: false, code: 'LOCAL_LOGIN_HELPER_MISSING', helperPath: LOCAL_LOGIN_HELPER };
+    }
+
+    const result = spawnSync('node', [LOCAL_LOGIN_HELPER], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        SONOS_LOGIN_BROWSER_PROFILE: this.profile,
+        OPENCLAW_BROWSER_PROFILE: this.profile,
+        [LOGIN_RECOVERY_SENTINEL]: '1',
+      },
+      timeout: 120000,
+    });
+
+    const stdout = String(result?.stdout || '').trim();
+    const stderr = String(result?.stderr || '').trim();
+    const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
+    return {
+      ok: result?.status === 0,
+      status: result?.status ?? null,
+      signal: result?.signal || null,
+      stdout,
+      stderr,
+      output: combined,
+      helperPath: LOCAL_LOGIN_HELPER,
+    };
+  }
+
+  ensureLoggedInOrRecover(targetId) {
+    if (process.env[LOGIN_RECOVERY_SENTINEL] === '1') {
+      return { ok: true, recovered: false, state: { bypassed: true } };
+    }
+
+    const state = this.readPageState(targetId) || {};
+    if (!state.loginBlocked) {
+      return { ok: true, recovered: false, state };
+    }
+    if (state.challengeRequired) {
+      throw new SkillError('preflight', 'LOGIN_CHALLENGE_REQUIRED', 'Sonos Web requires additional verification before playback can continue.', {
+        profile: this.profile,
+        url: state?.url || null,
+      });
+    }
+
+    const helper = this.runLocalLoginHelper();
+    this.log({
+      event: 'local-login-helper-run',
+      ok: helper.ok,
+      status: helper.status,
+      output: (helper.output || '').slice(0, 400),
+      helperPath: helper.helperPath,
+    });
+
+    if (!helper.ok) {
+      throw new SkillError('preflight', 'LOGIN_RECOVERY_FAILED', helper.output || 'Local Sonos login helper failed.', {
+        profile: this.profile,
+        helperPath: helper.helperPath,
+      });
+    }
+
+    this.waitMs(1800);
+    const after = this.readPageState(targetId) || {};
+    if (after.challengeRequired) {
+      throw new SkillError('preflight', 'LOGIN_CHALLENGE_REQUIRED', 'Sonos Web still requires additional verification after login recovery.', {
+        profile: this.profile,
+        url: after?.url || null,
+      });
+    }
+    if (after.loginBlocked) {
+      throw new SkillError('preflight', 'LOGIN_RECOVERY_FAILED', 'Sonos Web still appears logged out after login recovery.', {
+        profile: this.profile,
+        helperPath: helper.helperPath,
+        url: after?.url || null,
+      });
+    }
+    return { ok: true, recovered: true, state: after, helperOutput: helper.output };
   }
 
   readGatewayHealth() {

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { normalizeText, normalizeWhitespace } from './normalize.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_HISTORY_PATH = path.join(__dirname, '..', 'data', 'sonos-playback-history.json');
+const DEFAULT_HISTORY_PATH = path.join(__dirname, '..', 'data', 'playback-history.local.json');
 const HISTORY_LIMIT = 400;
 
 function getHistoryPath() {

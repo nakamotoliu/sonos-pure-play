@@ -10,7 +10,7 @@ This skill is for **room-targeted playback**. It uses:
 This package is intended for users who already have:
 - OpenClaw working
 - Sonos CLI working
-- A usable Sonos Web login session in the browser profile they plan to use
+- A usable Sonos Web login session in the browser profile they plan to use, or locally available Sonos credentials retrievable through the operator's password manager flow
 
 It is **not** a zero-config package.
 
@@ -19,11 +19,11 @@ It is **not** a zero-config package.
 Before this skill can work reliably, the operator must have a usable OpenClaw browser runtime profile for Sonos Web.
 
 Recommended default:
-- browser runtime profile name: `openclaw-headless`
-- Sonos Web already logged in inside that profile
-- `browser.profiles.openclaw-headless` present in `~/.openclaw/openclaw.json`
+- browser runtime profile name: `openclaw`
+- `browser.profiles.openclaw` present in `~/.openclaw/openclaw.json`
+- Sonos Web either already logged in inside that profile, or recoverable through the local login-recovery flow
 
-If `openclaw-headless` does not exist yet, do that first. Do not treat profile creation as an optional refinement.
+If `openclaw` does not exist yet, do that first. Do not treat profile creation as an optional refinement.
 
 Minimal browser profile config example:
 
@@ -33,18 +33,17 @@ Minimal browser profile config example:
     "enabled": true,
     "defaultProfile": "openclaw",
     "profiles": {
-      "openclaw-headless": {
-        "cdpPort": 18801,
+      "openclaw": {
+        "cdpPort": 18800,
         "driver": "openclaw",
-        "color": "#0F9D58",
-        "headless": true
+        "color": "#4285F4"
       }
     }
   }
 }
 ```
 
-If your main `browser.defaultProfile` should stay `openclaw`, keep it that way. This skill only needs `openclaw-headless` to exist as a browser runtime profile; it does not require changing the global default profile.
+This skill uses `openclaw` as the default browser runtime profile.
 
 After adding the profile, continue with [SETUP.md](./SETUP.md).
 
@@ -73,8 +72,9 @@ What is stable enough now:
 - failure screenshot capture for whole-tab diagnosis
 
 Known limitations:
-- this package assumes Sonos Web is already logged in and usable
 - Sonos Web can still behave inconsistently depending on account/service state
+- the runtime supports one direct manual login recovery through the visible Sonos form, but only for the standard email/password page
+- OTP / unexpected identity-provider challenges are still blocking conditions
 - final verification is intentionally conservative and may report failure when Sonos changes are too subtle to prove
 - this package is not focused on a CLI-only `CONTROL_ONLY` completion path
 
@@ -125,7 +125,7 @@ Score notes:
 1. **OpenClaw**
 2. **OpenClaw browser runtime**
 3. **Sonos CLI**
-4. **A created browser runtime profile for this skill, recommended: `openclaw-headless`**
+4. **A created browser runtime profile for this skill, recommended: `openclaw`**
 5. **A logged-in Sonos Web session in that browser profile**
 
 The browser profile used by this skill must:
@@ -136,9 +136,10 @@ The browser profile used by this skill must:
 ### Optional
 1. **Custom browser profile override**
    - use `OPENCLAW_BROWSER_PROFILE` only if it still points to the intended browser runtime profile
-2. **Preferred native headless config**
-   - set `browser.profiles.<name>.headless=true` in `~/.openclaw/openclaw.json` for the selected browser profile
-   - Sonos now reads profile-level `headless` first, then falls back to global `browser.headless`
+2. **Recommended setup choice for background execution**
+   - if you prefer background execution, set `browser.profiles.<name>.headless=true` in `~/.openclaw/openclaw.json` for the selected browser profile
+   - Sonos reads profile-level `headless` first, then falls back to global `browser.headless`
+   - this is a recommended setup option, not a hard requirement
 3. **Optional runner-side override**
    - `OPENCLAW_BROWSER_HEADLESS=true` still forces skill-side headless detection before config lookup
 
@@ -153,7 +154,7 @@ Important variables:
   Optional. Defaults to the local gateway when supported by your runtime.
 - `OPENCLAW_BROWSER_PROFILE`
   Optional browser-profile selector for `openclaw browser` commands only.
-  Default: `openclaw-headless`
+  Default: `openclaw`
 - `OPENCLAW_BROWSER_HEADLESS`
   Optional override for skill-side runtime detection.
   Accepted values: `true/false`, `1/0`, `yes/no`, `on/off`
@@ -162,7 +163,7 @@ Example:
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-export OPENCLAW_BROWSER_PROFILE="openclaw-headless"
+export OPENCLAW_BROWSER_PROFILE="openclaw"
 export OPENCLAW_BROWSER_HEADLESS="false"
 ```
 
@@ -179,7 +180,7 @@ openclaw browser tabs --profile openclaw
 Correct examples:
 
 ```bash
-openclaw browser --browser-profile openclaw-headless tabs
+openclaw browser --browser-profile openclaw tabs
 openclaw browser --browser-profile user tabs
 ```
 
@@ -187,11 +188,11 @@ openclaw browser --browser-profile user tabs
 
 1. Install OpenClaw
 2. Install Sonos CLI
-3. Create the browser runtime profile used by this skill, recommended: `openclaw-headless`
+3. Create the browser runtime profile used by this skill, recommended: `openclaw`
 4. Start the OpenClaw gateway/browser runtime
-5. Make sure the selected browser profile is already logged into Sonos Web
+5. Make sure the selected browser profile is usable for Sonos Web; an existing login is recommended, and the skill can attempt direct login recovery when the standard login page is reachable
 6. If running headed, make sure the Sonos tab can be brought to a real frontmost browser window
-7. If running headless, make sure the selected browser profile already holds a valid Sonos Web login session
+7. If running headless, prefer a browser profile that already holds a valid Sonos Web login session for more reliable background execution
 
 ## Preflight Check
 
@@ -199,7 +200,7 @@ Before use, confirm:
 
 ```bash
 sonos discover
-openclaw browser --browser-profile openclaw-headless tabs
+openclaw browser --browser-profile openclaw tabs
 printenv OPENCLAW_BROWSER_PROFILE
 ```
 
@@ -207,7 +208,7 @@ Expected results:
 - `sonos discover` returns your speakers
 - browser tab inspection works
 - `OPENCLAW_BROWSER_PROFILE` matches the intended browser runtime profile
-- `openclaw-headless` already exists in `~/.openclaw/openclaw.json` if that is the selected profile
+- `openclaw` already exists in `~/.openclaw/openclaw.json` if that is the selected profile
 - a Sonos Web tab can be opened or already exists in that profile
 - the runtime mode matches your expectation (`browser.profiles.<name>.headless`, `browser.headless`, or `OPENCLAW_BROWSER_HEADLESS=...`)
 
@@ -272,14 +273,14 @@ This usually means one of two things:
 This README should be read as an operator-facing contract, not as a promise of full public plug-and-play support.
 
 Out of scope:
-- automatic full login/session recovery when Sonos Web is not already usable
-- a headless-only hidden browser flow
+- advanced login/session recovery beyond the direct visible Sonos login form
+- a hidden/background browser flow without a prepared browser profile
 - completion without CLI truth verification
 - a no-setup consumer install path
 
-## Publish Boundary
+## Privacy Boundary
 
-This skill's public/exportable surface is the generic Sonos playback workflow only.
+This skill's maintained surface is the generic Sonos playback workflow only.
 
 Included in the skill surface:
 - room-targeted playback workflow
@@ -293,7 +294,7 @@ Excluded from the skill surface:
 - local playback history snapshots
 - local logs, generated JSON state, and private operator artifacts
 
-If a local automation depends on personal preferences or a private history file, keep it outside the published skill surface.
+If a local automation depends on personal preferences or a private history file, keep it outside the maintained skill surface.
 
 ## Files Worth Knowing
 
@@ -308,19 +309,36 @@ If a local automation depends on personal preferences or a private history file,
 
 ## Update Log
 
-This section is required by SOP. Every push/open-source update must append the specific change set here.
+This section is required by SOP. Every privacy/code-review update should append the specific change set here.
+
+### 2026-04-22
+- Tracking: workspace state after Sonos login recovery requirement update
+- Changed:
+  - documented password-manager-first Sonos credential handling
+  - documented controlled login recovery when Sonos Web is logged out
+- Added:
+  - `references/auth-and-recovery.md`
+  - ignored local-only paths for Sonos auth helper artifacts
+- Removed:
+  - none
+- Impact:
+  - Sonos runs no longer need to fail immediately on a plain logged-out page if the visible login form can be recovered
+  - login issues should first use the documented visible-form recovery steps in `references/auth-and-recovery.md`
+  - credentials must not be written into tracked skill files
+- Config/runtime impact:
+  - OTP or non-standard IdP branches still require manual intervention
 
 ### 2026-04-20
 - Tracking: workspace state after Sonos skill SOP review remediation
 - Changed:
-  - clarified the public/exportable boundary of the skill
+  - clarified the maintained privacy boundary of the skill
   - aligned the documentation with the current setup gate and publish scope
 - Added:
-  - README-level publish-boundary guidance for included vs excluded assets
+  - README-level privacy-boundary guidance for included vs excluded assets
 - Removed:
-  - `scripts/generate-jason-wakeup-plan.mjs`
+  - a user-specific wakeup planning helper from the maintained skill surface
 - Impact:
-  - removes Jason-specific wakeup planning logic from the tracked skill surface
+  - removes user-specific wakeup planning logic from the maintained skill surface
   - reduces the risk of mixing local-only automation with the generic Sonos playback skill
 - Config/runtime impact:
   - no required environment-variable change
@@ -335,11 +353,10 @@ This section is required by SOP. Every push/open-source update must append the s
 - Added:
   - `skills/sonos-pure-play/.gitignore`
 - Removed:
-  - `scripts/test-login-input.mjs`
-  - `scripts/test-okta-login-input.mjs`
+  - manual login helper test scripts that accepted Sonos credentials
 - Impact:
-  - improves privacy posture for export/open-source use
-  - ensures local logs and generated JSON state remain ignored even when the skill is exported as a standalone repo
+  - improves privacy posture for local/private skill maintenance
+  - ensures local logs and generated JSON state remain ignored under the main skill directory
 - Config/runtime impact:
   - no runtime entrypoint change
   - no required environment-variable change

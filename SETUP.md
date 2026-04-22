@@ -15,10 +15,10 @@ Make sure:
 - the chosen browser profile can access Sonos Web
 
 Recommended profile for this skill:
-- browser runtime profile name: `openclaw-headless`
+- browser runtime profile name: `openclaw`
 - use this as the default profile name unless you have a strong reason to override it
 
-If `openclaw-headless` does not exist yet in `~/.openclaw/openclaw.json`, create it first.
+If `openclaw` does not exist yet in `~/.openclaw/openclaw.json`, create it first.
 
 Minimal example:
 
@@ -28,11 +28,10 @@ Minimal example:
     "enabled": true,
     "defaultProfile": "openclaw",
     "profiles": {
-      "openclaw-headless": {
-        "cdpPort": 18801,
+      "openclaw": {
+        "cdpPort": 18800,
         "driver": "openclaw",
-        "color": "#0F9D58",
-        "headless": true
+        "color": "#4285F4"
       }
     }
   }
@@ -40,31 +39,37 @@ Minimal example:
 ```
 
 Notes:
-- `profiles.openclaw-headless` is the important part for this skill
+- `profiles.openclaw` is the important part for this skill
 - you do not need to change `browser.defaultProfile` if your normal default should stay `openclaw`
-- `headless: true` at the profile level is the preferred setup for this skill
+- headless is optional for this skill, not required; if you want background execution, you can set `headless: true` at the profile level as a recommended setup choice
+- headed mode is also supported when you want visible debugging or manual observation
 - if your config already has a `browser` section, merge this into it instead of replacing unrelated keys
 
 Example check:
 
 ```bash
-openclaw browser --browser-profile openclaw-headless tabs
+openclaw browser --browser-profile openclaw tabs
 printenv OPENCLAW_BROWSER_PROFILE
 ```
 
 Confirm that the printed `OPENCLAW_BROWSER_PROFILE` value is the browser runtime profile you intend to use.
-Also confirm that your config file contains `browser.profiles.openclaw-headless` when that is the profile you plan to use.
+Also confirm that your config file contains `browser.profiles.openclaw` when that is the profile you plan to use.
 
 Profile rules:
 - CLI root `--profile <name>` switches the OpenClaw instance/state directory to `~/.openclaw-<name>`.
 - Browser CLI must use `--browser-profile <name>`.
 - Wrong example: `openclaw browser tabs --profile openclaw`
 - Correct examples:
-  - `openclaw browser --browser-profile openclaw-headless tabs`
+  - `openclaw browser --browser-profile openclaw tabs`
   - `openclaw browser --browser-profile user tabs`
 
 ## 3. Log into Sonos Web
 Open Sonos Web in the browser profile you plan to use and complete login.
+
+Credential rule:
+- Sonos login credentials should be kept in the operator's password manager, not in tracked files inside this skill.
+- If the runtime later needs to restore login automatically, it should read credentials from the operator's password manager first.
+- Any local-only helper mapping or cached auth artifacts must stay in ignored paths only.
 
 Recommended destination:
 
@@ -76,17 +81,20 @@ https://play.sonos.com/zh-cn/web-app
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-export OPENCLAW_BROWSER_PROFILE="openclaw-headless"
-export OPENCLAW_BROWSER_HEADLESS="true"
+export OPENCLAW_BROWSER_PROFILE="openclaw"
 ```
 
 `OPENCLAW_BROWSER_PROFILE` here means the browser runtime profile only. Do not use OpenClaw CLI global `--profile openclaw` for this skill.
 If browser commands fail with `gateway token missing` and the path points at `~/.openclaw-xxx`, first check for mistaken CLI root `--profile` usage.
-`OPENCLAW_BROWSER_HEADLESS` is optional if the profile-level config already sets `headless: true`, but setting it explicitly is a simple way to avoid ambiguity during first-time setup.
+`OPENCLAW_BROWSER_HEADLESS` is optional and usually unnecessary when using the default `openclaw` profile.
 
 ## 5. Run a minimal smoke test
 
 Use the skill from the agent runtime. Do not rely on `scripts/run.mjs`; that script entry has been removed.
+
+Recovery expectation:
+- If Sonos Web is unexpectedly logged out, the runtime may attempt one controlled login recovery using password-manager-sourced credentials.
+- If credential lookup fails or Sonos shows an OTP / external challenge page, stop and report the block instead of faking success.
 
 Runtime rules to keep:
 - do not finish a media playback request through Sonos CLI alone

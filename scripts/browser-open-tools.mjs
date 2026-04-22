@@ -100,6 +100,7 @@ export function ensureSonosTab(runner) {
 
   if (tabUrl.includes('/search')) {
     waitMs(runner, 80);
+    runner.ensureLoggedInOrRecover(tab.targetId);
     runner.log({
       event: 'tab-ready-fast-path',
       targetId: tab.targetId,
@@ -117,6 +118,7 @@ export function ensureSonosTab(runner) {
   waitForLoad(runner, tab.targetId);
   runner.log({ event: 'ensure-sonos-tab-after-load-wait', targetId: tab.targetId });
   waitMs(runner, 80);
+  runner.ensureLoggedInOrRecover(tab.targetId);
   runner.log({
     event: 'tab-ready',
     targetId: tab.targetId,

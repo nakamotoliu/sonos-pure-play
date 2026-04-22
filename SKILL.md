@@ -9,12 +9,13 @@ description: |-
 ## Prerequisites
 - Use an OpenClaw browser session that matches the runtime mode:
   - headed mode: a visible foreground browser session is allowed and may be focused during execution
-  - headless mode: a hidden browser session is allowed, but Sonos Web must already be logged in inside that browser profile
-- Default browser runtime profile is `openclaw-headless` unless explicitly overridden for the chosen browser session.
+  - headless mode: a hidden browser session is also supported; Sonos Web can either already be logged in in that browser profile or be recovered once through the local login-recovery flow
+- Default browser runtime profile is `openclaw` unless explicitly overridden for the chosen browser session.
 - The recommended first-time operator setup is:
-  - create `browser.profiles.openclaw-headless` in `~/.openclaw/openclaw.json`
-  - set profile-level `headless: true` for that profile when this skill should run hidden by default
-  - log into Sonos Web once inside that same browser profile
+  - use `browser.profiles.openclaw` in `~/.openclaw/openclaw.json`
+  - keep that profile usable for this skill's browser flow
+  - choose headed or headless based on operator preference; headless is a recommended setup choice for background runs, not a hard requirement
+  - verify the local login helper can complete a normal Sonos login in that same browser profile
 - Distinguish the two profile concepts strictly:
   - CLI root `--profile <name>` switches the OpenClaw instance/state directory to `~/.openclaw-<name>`.
   - Browser CLI `--browser-profile <name>` selects the browser runtime profile.
@@ -25,18 +26,22 @@ description: |-
 - The bundled browser plugin must be enabled and loadable (`plugins.allow` includes `browser`, `plugins.entries.browser.enabled=true`, `browser.enabled=true`).
 - **First-time setup**: Log into Sonos Web (play.sonos.com) once in the browser profile used by this skill.
 - Browser operations should go through the official OpenClaw browser runtime / CLI, not a custom CDP bridge.
+- Credential source rule for any login recovery: keep Sonos credentials out of tracked skill files; if local credential material is needed, store it only in ignored local files under `skills/sonos-pure-play/secrets/`.
 
 ## Preflight gate
 - Before starting any playback workflow, the agent should treat browser-profile readiness as a hard gate.
 - The agent should confirm:
-  - the selected browser runtime profile exists, recommended default: `openclaw-headless`
+  - the selected browser runtime profile exists, recommended default: `openclaw`
   - the profile is the one intended by `OPENCLAW_BROWSER_PROFILE` or the active runner configuration
-  - Sonos Web is already logged in and usable in that profile
-- If any of those conditions are not true, do not continue into search, candidate selection, or playback actions.
+  - Sonos Web is already logged in and usable in that profile, or the login page is recoverable with locally available credentials through the operator password-manager flow
+- If the selected profile itself is missing or browser runtime is not usable, do not continue into search, candidate selection, or playback actions.
+- If Sonos Web is simply logged out, first attempt controlled login recovery using locally available credentials through the operator password-manager flow before failing the run.
 - Stop early and direct the operator to:
   - [README.md](./README.md)
   - [SETUP.md](./SETUP.md)
-- Missing setup is an operator-preparation problem, not a runtime recovery branch.
+  - [references/auth-and-recovery.md](./references/auth-and-recovery.md)
+- Missing browser/profile setup is an operator-preparation problem; logged-out Sonos Web is a runtime recovery branch.
+- Do not treat headless itself as a preflight requirement; readiness is about usable profile + login recoverability, not a forced runtime mode.
 
 ## Browser profile hard rules
 - Never use `openclaw browser ... --profile ...` for browser work.
@@ -44,7 +49,7 @@ description: |-
 - Wrong example: `openclaw browser tabs --profile openclaw`
   - This is wrong because it switches the OpenClaw state directory to `~/.openclaw-openclaw`.
 - Correct examples:
-  - `openclaw browser --browser-profile openclaw-headless tabs`
+  - `openclaw browser --browser-profile openclaw tabs`
   - `openclaw browser --browser-profile user tabs`
 - If browser troubleshooting shows `gateway token missing` and the path points at `~/.openclaw-xxx`, check for accidental CLI root `--profile` misuse first.
 
@@ -79,10 +84,13 @@ description: |-
 The skill, not code, defines the business flow. Follow these steps in order and do not invent a different flow:
 
 0. Run the preflight gate:
-   - confirm the selected browser runtime profile exists, recommended default: `openclaw-headless`
+   - confirm the selected browser runtime profile exists, recommended default: `openclaw`
    - confirm the chosen profile is the same profile the browser runner will use
-   - confirm Sonos Web is already logged in and usable in that profile
-   - if not ready, stop and direct the operator to `README.md` and `SETUP.md`
+   - confirm Sonos Web is already logged in and usable in that profile, or can be recovered through the visible login form
+   - if the page is logged out, use the manual visible-form recovery described in `references/auth-and-recovery.md`
+   - on the Sonos login page, locate the textbox labeled `电子邮件` / `Email` for the account, and the textbox labeled `密码` / `Password` for the password
+   - fill email first, then password, confirm the `登录` / `Sign in` button becomes enabled, click it, and if a welcome page appears, click `继续` / `Continue`
+   - if not ready after that, stop and direct the operator to `README.md`, `SETUP.md`, and `references/auth-and-recovery.md`
 1. Resolve the exact target room with CLI tools from `scripts/cli-control.mjs`.
 2. Inspect current group status with CLI tools and normalize the target room to solo when needed.
 3. Capture preflight playback truth with CLI tools:
@@ -96,6 +104,7 @@ The skill, not code, defines the business flow. Follow these steps in order and 
 5. Use browser read tools from `scripts/browser-read-tools.mjs` to confirm:
    - the tab is on the expected page
    - login is not blocking the flow
+   - if login is blocking the flow, perform one controlled visible-form login recovery before continuing
 6. Use browser read/action tools to sync Sonos Web active output to the CLI-resolved room.
 7. Use input tools from `scripts/search-input-ops.mjs` and action tools from `scripts/browser-action-tools.mjs` to:
    - focus the search box
@@ -169,6 +178,7 @@ The skill, not code, defines the business flow. Follow these steps in order and 
   - wait briefly and reread
   - reopen the fixed search page
   - rewrite the same query
+  - perform one password-manager-backed Sonos Web login recovery when the visible page is clearly logged out
   - reopen the playback menu through `openPlaybackActionMenu(...)` when the action surface is missing or stale
   - when playback verification reports a retryable failure, choose a different result and rerun the playback branch
 - The first hard gate is query confirmation:
@@ -184,7 +194,8 @@ The skill, not code, defines the business flow. Follow these steps in order and 
   - invent a new business flow
   - invent new permanent selectors during a run
   - bypass the dedicated playback-menu helper with a generic click path
-  - change code during the run
+  - persist credentials into tracked files
+  - change code during a playback run
 
 ## Current support
 - explicit target-room playback requests
@@ -195,12 +206,12 @@ The skill, not code, defines the business flow. Follow these steps in order and 
 ## Deferred scope
 - richer ambiguity handling for very broad requests
 - polished public `CONTROL_ONLY` coverage
-- full login/session recovery when Sonos Web is not already usable
+- more advanced login/session recovery beyond the direct Sonos login form (for example OTP or complex IdP branches)
 
 ## Publish boundary
 - This skill's tracked/public surface is the generic Sonos playback workflow only.
 - Do not add user-specific wakeup planners, personal rotation scripts, or private preference generators to this skill surface.
-- Keep local-only automations and private operator routines outside the published skill directory, or exclude them explicitly before export/push.
+- Keep local-only automations and private operator routines outside the maintained skill directory, or exclude them explicitly before commit/push.
 
 ## Skill layout
 - `scripts/browser-open-tools.mjs` = browser page-opening/focus tools

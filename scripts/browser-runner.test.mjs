@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  assertBrowserProfileSetup,
+  inspectBrowserProfileSetup,
   isRetryableBrowserAttachError,
   resolveBrowserHeadlessMode,
-  shouldUseTemporaryGlobalHeadlessConfig,
   summarizeBrowserAttachError,
 } from './browser-runner.mjs';
 
@@ -53,6 +54,86 @@ test('prefers OPENCLAW_BROWSER_HEADLESS env override', () => {
   );
 });
 
+test('reads configured browser profile setup details', async (t) => {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sonos-browser-runner-'));
+  t.after(() => fs.promises.rm(tmpDir, { recursive: true, force: true }));
+  const tmpPath = path.join(tmpDir, 'openclaw.json');
+  await fs.promises.writeFile(
+    tmpPath,
+    JSON.stringify({
+      browser: {
+        enabled: true,
+        profiles: {
+          openclaw: { driver: 'openclaw' },
+        },
+      },
+    }),
+    'utf8'
+  );
+
+  assert.deepEqual(
+    inspectBrowserProfileSetup({ env: {}, configPath: tmpPath }),
+    {
+      profile: 'openclaw',
+      configPath: tmpPath,
+      config: {
+        browser: {
+          enabled: true,
+          profiles: {
+            openclaw: { driver: 'openclaw' },
+          },
+        },
+      },
+      configExists: true,
+      browserEnabled: true,
+      profileExists: true,
+      profileConfig: { driver: 'openclaw' },
+    }
+  );
+});
+
+test('fails fast when OpenClaw config is missing', () => {
+  assert.throws(
+    () => assertBrowserProfileSetup({ env: {}, configPath: '/path/that/does/not/exist.json' }),
+    /OpenClaw config is missing or unreadable/i
+  );
+});
+
+test('fails fast when browser runtime is disabled', async (t) => {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sonos-browser-runner-'));
+  t.after(() => fs.promises.rm(tmpDir, { recursive: true, force: true }));
+  const tmpPath = path.join(tmpDir, 'openclaw.json');
+  await fs.promises.writeFile(tmpPath, JSON.stringify({ browser: { enabled: false, profiles: { openclaw: {} } } }), 'utf8');
+
+  assert.throws(
+    () => assertBrowserProfileSetup({ env: {}, configPath: tmpPath }),
+    /browser runtime is disabled/i
+  );
+});
+
+test('fails fast when the selected browser profile is not configured', async (t) => {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sonos-browser-runner-'));
+  t.after(() => fs.promises.rm(tmpDir, { recursive: true, force: true }));
+  const tmpPath = path.join(tmpDir, 'openclaw.json');
+  await fs.promises.writeFile(
+    tmpPath,
+    JSON.stringify({
+      browser: {
+        enabled: true,
+        profiles: {
+          openclaw: { headless: false },
+        },
+      },
+    }),
+    'utf8'
+  );
+
+  assert.throws(
+    () => assertBrowserProfileSetup({ env: {}, configPath: tmpPath, profile: 'other-profile' }),
+    /Browser profile "other-profile" is not configured/i
+  );
+});
+
 test('falls back to browser.headless in OpenClaw config', async (t) => {
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sonos-browser-runner-'));
   t.after(() => fs.promises.rm(tmpDir, { recursive: true, force: true }));
@@ -71,30 +152,26 @@ test('prefers browser.profiles.<name>.headless over global browser.headless', as
       browser: {
         headless: false,
         profiles: {
-          'openclaw-headless': { headless: true },
+          openclaw: { headless: true },
         },
       },
     }),
     'utf8'
   );
   assert.equal(resolveBrowserHeadlessMode({ env: {}, configPath: tmpPath }), true);
-  assert.equal(
-    shouldUseTemporaryGlobalHeadlessConfig({ env: {}, configPath: tmpPath }),
-    false
-  );
 });
 
-test('uses temporary global headless fallback only for the legacy dedicated profile convention', async (t) => {
+test('default openclaw profile is not implicitly forced to headless', async (t) => {
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sonos-browser-runner-'));
   t.after(() => fs.promises.rm(tmpDir, { recursive: true, force: true }));
   const tmpPath = path.join(tmpDir, 'openclaw.json');
-  await fs.promises.writeFile(tmpPath, JSON.stringify({ browser: { headless: false } }), 'utf8');
+  await fs.promises.writeFile(tmpPath, JSON.stringify({ browser: { headless: false, profiles: { openclaw: {} } } }), 'utf8');
   assert.equal(
-    shouldUseTemporaryGlobalHeadlessConfig({
+    resolveBrowserHeadlessMode({
       env: {},
       configPath: tmpPath,
-      profile: 'openclaw-headless',
+      profile: 'openclaw',
     }),
-    true
+    false
   );
 });

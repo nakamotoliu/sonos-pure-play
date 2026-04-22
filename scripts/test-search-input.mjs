@@ -14,7 +14,7 @@ if (!query) {
 }
 
 const runner = new PurePlayBrowserRunner({
-  profile: process.env.OPENCLAW_BROWSER_PROFILE || 'openclaw-headless',
+  profile: process.env.OPENCLAW_BROWSER_PROFILE || 'openclaw',
   logger: (event) => emit(event),
 });
 
