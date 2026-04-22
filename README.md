@@ -10,7 +10,7 @@ This skill is for **room-targeted playback**. It uses:
 This package is intended for users who already have:
 - OpenClaw working
 - Sonos CLI working
-- A usable Sonos Web login session in the browser profile they plan to use, or locally available Sonos credentials retrievable through the operator's password manager flow
+- A usable Sonos Web login session in the browser profile they plan to use
 
 It is **not** a zero-config package.
 
@@ -21,7 +21,7 @@ Before this skill can work reliably, the operator must have a usable OpenClaw br
 Recommended default:
 - browser runtime profile name: `openclaw`
 - `browser.profiles.openclaw` present in `~/.openclaw/openclaw.json`
-- Sonos Web either already logged in inside that profile, or recoverable through the local login-recovery flow
+- Sonos Web already logged in inside that profile
 
 If `openclaw` does not exist yet, do that first. Do not treat profile creation as an optional refinement.
 
@@ -73,7 +73,7 @@ What is stable enough now:
 
 Known limitations:
 - Sonos Web can still behave inconsistently depending on account/service state
-- the runtime supports one direct manual login recovery through the visible Sonos form, but only for the standard email/password page
+- if the selected browser profile is logged out, playback runs may stop until the operator restores a usable logged-in session
 - OTP / unexpected identity-provider challenges are still blocking conditions
 - final verification is intentionally conservative and may report failure when Sonos changes are too subtle to prove
 - this package is not focused on a CLI-only `CONTROL_ONLY` completion path
@@ -190,7 +190,7 @@ openclaw browser --browser-profile user tabs
 2. Install Sonos CLI
 3. Create the browser runtime profile used by this skill, recommended: `openclaw`
 4. Start the OpenClaw gateway/browser runtime
-5. Make sure the selected browser profile is usable for Sonos Web; an existing login is recommended, and the skill can attempt direct login recovery when the standard login page is reachable
+5. Make sure the selected browser profile is usable for Sonos Web and already logged in before starting playback runs
 6. If running headed, make sure the Sonos tab can be brought to a real frontmost browser window
 7. If running headless, prefer a browser profile that already holds a valid Sonos Web login session for more reliable background execution
 
@@ -312,21 +312,19 @@ If a local automation depends on personal preferences or a private history file,
 This section is required by SOP. Every privacy/code-review update should append the specific change set here.
 
 ### 2026-04-22
-- Tracking: workspace state after Sonos login recovery requirement update
+- Tracking: workspace state after Sonos privacy-boundary cleanup
 - Changed:
-  - documented password-manager-first Sonos credential handling
-  - documented controlled login recovery when Sonos Web is logged out
+  - removed operator-specific session workflow guidance from tracked docs
+  - tightened the requirement that the chosen browser profile must already be usable for Sonos Web
 - Added:
-  - `references/auth-and-recovery.md`
-  - ignored local-only paths for Sonos auth helper artifacts
-- Removed:
   - none
+- Removed:
+  - tracked auth/session handling guidance
 - Impact:
-  - Sonos runs no longer need to fail immediately on a plain logged-out page if the visible login form can be recovered
-  - login issues should first use the documented visible-form recovery steps in `references/auth-and-recovery.md`
-  - credentials must not be written into tracked skill files
+  - tracked skill docs no longer describe operator-specific session procedures
+  - playback runs now assume the selected browser profile is already prepared for Sonos Web
 - Config/runtime impact:
-  - OTP or non-standard IdP branches still require manual intervention
+  - login/session preparation remains an operator responsibility outside tracked skill docs
 
 ### 2026-04-20
 - Tracking: workspace state after Sonos skill SOP review remediation
@@ -348,12 +346,12 @@ This section is required by SOP. Every privacy/code-review update should append 
 ### 2026-04-15
 - Tracking: workspace commit `89b874a`
 - Changed:
-  - removed login helper test scripts that accepted Sonos credentials for manual login testing
+  - removed manual login helper test scripts from the tracked skill surface
   - added a skill-local `.gitignore`
 - Added:
   - `skills/sonos-pure-play/.gitignore`
 - Removed:
-  - manual login helper test scripts that accepted Sonos credentials
+  - manual login helper test scripts
 - Impact:
   - improves privacy posture for local/private skill maintenance
   - ensures local logs and generated JSON state remain ignored under the main skill directory

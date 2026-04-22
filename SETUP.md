@@ -66,9 +66,9 @@ Profile rules:
 ## 3. Log into Sonos Web
 Open Sonos Web in the browser profile you plan to use and complete login.
 
-Credential rule:
-- Sonos login credentials should be kept in the operator's password manager, not in tracked files inside this skill.
-- If the runtime later needs to restore login automatically, it should read credentials from the operator's password manager first.
+Login/session rule:
+- Sonos Web should already be logged in in the browser profile used by this skill.
+- Tracked skill files must not contain secrets or machine-specific handling instructions.
 - Any local-only helper mapping or cached auth artifacts must stay in ignored paths only.
 
 Recommended destination:
@@ -92,9 +92,9 @@ If browser commands fail with `gateway token missing` and the path points at `~/
 
 Use the skill from the agent runtime. Do not rely on `scripts/run.mjs`; that script entry has been removed.
 
-Recovery expectation:
-- If Sonos Web is unexpectedly logged out, the runtime may attempt one controlled login recovery using password-manager-sourced credentials.
-- If credential lookup fails or Sonos shows an OTP / external challenge page, stop and report the block instead of faking success.
+Login expectation:
+- If Sonos Web is unexpectedly logged out, stop and report that the selected browser profile is not ready.
+- If Sonos shows an OTP / external challenge page, stop and report the block instead of faking success.
 
 Runtime rules to keep:
 - do not finish a media playback request through Sonos CLI alone
