@@ -34,6 +34,8 @@ description: |-
   - the selected browser runtime profile exists, recommended default: `openclaw`
   - the profile is the one intended by `OPENCLAW_BROWSER_PROFILE` or the active runner configuration
   - Sonos Web is already logged in and usable in that profile
+- Treat the default `openclaw` browser profile as valid when the OpenClaw runtime exposes it, even if `browser.profiles.openclaw` is not explicitly written in `openclaw.json`.
+- For non-default custom profiles, require an explicit config entry.
 - If the selected profile itself is missing, browser runtime is not usable, or Sonos Web is logged out in that profile, do not continue into search, candidate selection, or playback actions.
 - Stop early and direct the operator to:
   - [README.md](./README.md)
@@ -102,6 +104,7 @@ The skill, not code, defines the business flow. Follow these steps in order and 
    - if login is blocking the flow, stop and report that the browser profile is not ready
 6. Use browser read/action tools to sync Sonos Web active output to the CLI-resolved room.
 7. Use input tools from `scripts/search-input-ops.mjs` and action tools from `scripts/browser-action-tools.mjs` to:
+   - call the browser-runner search helpers (`replaceVisibleSearchValue(...)`, `checkSearchQueryApplied(...)`, `ensureQueryGate(...)`) instead of raw browser fill/type commands
    - focus the search box
    - clear/replace the query
    - verify the query stayed in the box with the query gate
@@ -134,6 +137,7 @@ The skill, not code, defines the business flow. Follow these steps in order and 
    - call `openPlaybackActionMenu(...)` to open `更多选项` and confirm the expected playback actions became visible
    - then call `choosePlaybackAction(...)` to click `替换队列` first, otherwise `立即播放`
    - do not use generic `clickButtonByLabel(...)` or ad hoc browser evaluate/click for this playback-menu step
+   - treat disappearance/transition of the chosen menu action as part of the success check before moving to CLI verification
 13. Use CLI tools and `scripts/verify.mjs` to verify final truth:
    - correct room
    - correct group state
@@ -168,6 +172,11 @@ The skill, not code, defines the business flow. Follow these steps in order and 
 
 ## Runtime Recovery Rules
 - Recovery is allowed only inside the fixed flow above.
+- Every critical step must behave like a gate: step action -> immediate verification -> continue only when verified.
+- If a step throws, hangs at the browser-command layer, or fails verification, the runner must immediately capture failure evidence instead of silently stalling.
+- Failure evidence should include, when possible: page state, room context, aria snapshot, ai snapshot, and a screenshot copy saved to local ignored artifacts so later runs can inspect the exact stuck page.
+- Failure screenshots/artifacts should be saved with timestamp-based filenames. If `data/failure-notify.local.json` is configured, failure evidence should also be sent in a fixed way to the configured channel/target (for example a Telegram private chat ID) so operators can always see the stuck page.
+- Success runs may also capture a final screenshot with the same timestamp-based naming style and send it to the same configured private target, so operators can see the final landed page as well as failure state.
 - Allowed recovery actions:
   - reread the current page
   - wait briefly and reread
@@ -175,6 +184,7 @@ The skill, not code, defines the business flow. Follow these steps in order and 
   - rewrite the same query
   - reopen the playback menu through `openPlaybackActionMenu(...)` when the action surface is missing or stale
   - when playback verification reports a retryable failure, choose a different result and rerun the playback branch
+- Prefer browser-runner helper methods over raw browser primitives for key-path actions. Raw `fill`, ad hoc `evaluate`, or generic button clicks are fallback-debug tools, not the normal playback path.
 - The first hard gate is query confirmation:
   - use `checkSearchQueryApplied(...)` or `ensureQueryGate(...)`
   - do not inspect results until the query gate is true
@@ -221,5 +231,6 @@ The skill, not code, defines the business flow. Follow these steps in order and 
 - `scripts/search-input-ops.mjs` = shared input-box primitives for focus, replace, query-gate verification, and light retry
 - `scripts/normalize.mjs` = shared normalization helpers
 - `scripts/verify.mjs` = final playback verification
+- `scripts/failure-notify.mjs` = local failure screenshot/report notification helper driven by `data/failure-notify.local.json`
 - `references/ui-states.md` = web state model
 - `references/phase-1-status.md` = current public status

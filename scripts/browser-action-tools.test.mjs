@@ -48,7 +48,7 @@ test('openPlaybackActionMenu opens more options and confirms actions are visible
   assert.equal(result.ok, true);
   assert.equal(result.clickedMoreOptions, true);
   assert.deepEqual(result.availableActions, ['替换队列', '立即播放']);
-  assert.deepEqual(runner.waits, [350]);
+  assert.deepEqual(runner.waits, []);
 });
 
 test('choosePlaybackAction accepts normalized replace queue variants', () => {

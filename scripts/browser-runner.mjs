@@ -47,11 +47,47 @@ import {
   snapshotAi as snapshotAiTool,
 } from './browser-read-tools.mjs';
 import { extractUsablePageBlocks as extractUsablePageBlocksTool } from './browser-surface-tools.mjs';
+import {
+  checkSearchQueryApplied as checkSearchQueryAppliedTool,
+  ensureQueryGate as ensureQueryGateTool,
+  replaceVisibleSearchValue as replaceVisibleSearchValueTool,
+} from './search-input-ops.mjs';
+import {
+  clickLoginButton as clickLoginButtonTool,
+  replaceVisibleLoginValue as replaceVisibleLoginValueTool,
+} from './login-input-ops.mjs';
 
 const DEFAULT_GATEWAY_PORT = '18789';
 const DEFAULT_OPENCLAW_CONFIG_PATH = path.join(os.homedir(), '.openclaw', 'openclaw.json');
 const DEFAULT_SONOS_BROWSER_PROFILE = 'openclaw';
 const LOGIN_RECOVERY_SENTINEL = '__SONOS_LOGIN_RECOVERY_ACTIVE__';
+const LOCAL_LOGIN_HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'login-recovery.local.mjs');
+const DEFAULT_FAILURE_ARTIFACT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'logs', 'failure-artifacts.local');
+const DEFAULT_BROWSER_COMMAND_TIMEOUT_MS = Number(process.env.SONOS_BROWSER_COMMAND_TIMEOUT_MS || 30000);
+
+function sanitizeArtifactSegment(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'step';
+}
+
+export function buildStepArtifactBasename(step, now = new Date()) {
+  const iso = new Date(now).toISOString().replace(/[:.]/g, '-');
+  return `${iso}-${sanitizeArtifactSegment(step)}`;
+}
+
+export function normalizeStepGateResult(value) {
+  if (typeof value === 'undefined') return { ok: true };
+  if (typeof value === 'boolean') return { ok: value };
+  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'ok')) return value;
+  return {
+    ok: Boolean(value),
+    value,
+  };
+}
 
 function readOpenClawConfig(configPath = DEFAULT_OPENCLAW_CONFIG_PATH) {
   try {
@@ -61,13 +97,46 @@ function readOpenClawConfig(configPath = DEFAULT_OPENCLAW_CONFIG_PATH) {
   }
 }
 
+function listRuntimeBrowserProfiles() {
+  try {
+    const raw = execFileSync('openclaw', ['browser', '--json', 'profiles'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 10000,
+    });
+    const trimmed = String(raw || '').trim();
+    const parsed = trimmed ? JSON.parse(trimmed) : null;
+    const entries = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.profiles)
+        ? parsed.profiles
+        : Array.isArray(parsed?.items)
+          ? parsed.items
+          : [];
+
+    return entries
+      .map((entry) => {
+        if (typeof entry === 'string') return { name: entry };
+        const name = String(entry?.name || entry?.profile || '').trim();
+        if (!name) return null;
+        return { ...entry, name };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 export function inspectBrowserProfileSetup({
   env = process.env,
   configPath = DEFAULT_OPENCLAW_CONFIG_PATH,
   profile = env.OPENCLAW_BROWSER_PROFILE || DEFAULT_SONOS_BROWSER_PROFILE,
+  runtimeProfiles = null,
 } = {}) {
   const config = readOpenClawConfig(configPath);
   const configuredProfile = config?.browser?.profiles?.[profile] || null;
+  const availableRuntimeProfiles = Array.isArray(runtimeProfiles) ? runtimeProfiles : listRuntimeBrowserProfiles();
+  const runtimeProfile = availableRuntimeProfiles.find((entry) => String(entry?.name || '') === profile) || null;
 
   return {
     profile,
@@ -75,7 +144,10 @@ export function inspectBrowserProfileSetup({
     config,
     configExists: !!config,
     browserEnabled: config?.browser?.enabled !== false,
-    profileExists: !!configuredProfile,
+    runtimeProfiles: availableRuntimeProfiles,
+    runtimeProfileExists: !!runtimeProfile,
+    runtimeProfile,
+    profileExists: !!configuredProfile || !!runtimeProfile,
     profileConfig: configuredProfile,
   };
 }
@@ -111,10 +183,11 @@ export function assertBrowserProfileSetup(options = {}) {
     throw new SkillError(
       'preflight',
       'BROWSER_PROFILE_NOT_CONFIGURED',
-      `Browser profile "${setup.profile}" is not configured in ${setup.configPath}. Create browser.profiles.${setup.profile} before running this Sonos skill.`,
+      `Browser profile "${setup.profile}" is not available. Configure browser.profiles.${setup.profile} or make sure the runtime profile exists before running this Sonos skill.`,
       {
         profile: setup.profile,
         configPath: setup.configPath,
+        runtimeProfiles: setup.runtimeProfiles,
       }
     );
   }
@@ -209,15 +282,20 @@ function localLoginHelperExists() {
 }
 
 export class PurePlayBrowserRunner {
-  constructor({ profile = process.env.OPENCLAW_BROWSER_PROFILE || DEFAULT_SONOS_BROWSER_PROFILE, logger = () => {}, baseUrl = SEARCH_URL } = {}) {
+  constructor({ profile = process.env.OPENCLAW_BROWSER_PROFILE || DEFAULT_SONOS_BROWSER_PROFILE, logger = () => {}, baseUrl = SEARCH_URL, artifactRoot = DEFAULT_FAILURE_ARTIFACT_ROOT } = {}) {
     this.profile = profile;
     this.logger = logger;
     this.baseUrl = baseUrl;
+    this.artifactRoot = artifactRoot;
     this.gatewayPort = readGatewayPort();
     this.gatewayHealthUrl = `http://127.0.0.1:${this.gatewayPort}/health`;
     this.profileSetup = assertBrowserProfileSetup({ profile: this.profile });
     this.headless = resolveBrowserHeadlessMode({ profile: this.profile });
     this.configPath = DEFAULT_OPENCLAW_CONFIG_PATH;
+    this.browserCommandTimeoutMs = DEFAULT_BROWSER_COMMAND_TIMEOUT_MS;
+    this.currentStep = null;
+    this.currentTargetId = null;
+    this.currentStepContext = null;
   }
 
   log(event) {
@@ -226,6 +304,197 @@ export class PurePlayBrowserRunner {
 
   interactionMode() {
     return this.headless ? 'headless' : 'foreground';
+  }
+
+  ensureArtifactRoot() {
+    fs.mkdirSync(this.artifactRoot, { recursive: true });
+    return this.artifactRoot;
+  }
+
+  captureFailureEvidence(step, { targetId = null, error = null, context = {} } = {}) {
+    const baseName = buildStepArtifactBasename(step);
+    const dir = this.ensureArtifactRoot();
+    const artifactPath = path.join(dir, `${baseName}.json`);
+    const safeCall = (label, fn) => {
+      try {
+        return { ok: true, label, value: fn() };
+      } catch (innerError) {
+        return {
+          ok: false,
+          label,
+          error: String(innerError?.message || innerError),
+          code: innerError?.code || null,
+          phase: innerError?.phase || null,
+          data: innerError?.data || null,
+        };
+      }
+    };
+
+    const pageState = targetId ? safeCall('pageState', () => this.readPageState(targetId)) : null;
+    const roomContext = targetId ? safeCall('roomContext', () => this.readRoomContext(targetId)) : null;
+    const snapshot = targetId ? safeCall('snapshot', () => this.snapshot(targetId, 180)) : null;
+    const snapshotAi = targetId ? safeCall('snapshotAi', () => this.snapshotAi(targetId, 180)) : null;
+    const screenshot = targetId ? safeCall('screenshotRoot', () => this.screenshotRoot(targetId)) : null;
+
+    let screenshotCopyPath = null;
+    const mediaPath = screenshot?.ok ? screenshot?.value?.mediaPath : null;
+    if (mediaPath && fs.existsSync(mediaPath)) {
+      const ext = path.extname(mediaPath) || '.png';
+      screenshotCopyPath = path.join(dir, `${baseName}${ext}`);
+      try {
+        fs.copyFileSync(mediaPath, screenshotCopyPath);
+      } catch {
+        screenshotCopyPath = null;
+      }
+    }
+
+    const payload = {
+      ok: true,
+      step,
+      targetId,
+      capturedAt: new Date().toISOString(),
+      profile: this.profile,
+      interactionMode: this.interactionMode?.() || null,
+      gatewayHealth: typeof this.readGatewayHealth === 'function' ? this.readGatewayHealth() : null,
+      context,
+      activeStep: this.currentStep,
+      error: error
+        ? {
+            message: String(error?.message || error),
+            code: error?.code || null,
+            phase: error?.phase || null,
+            data: error?.data || null,
+            stack: error?.stack || null,
+          }
+        : null,
+      pageState,
+      roomContext,
+      snapshot,
+      snapshotAi,
+      screenshot: screenshot
+        ? {
+            ...screenshot,
+            mediaPath,
+            copyPath: screenshotCopyPath,
+          }
+        : null,
+    };
+
+    fs.writeFileSync(artifactPath, JSON.stringify(payload, null, 2));
+    this.log({
+      event: 'failure-evidence-captured',
+      step,
+      targetId,
+      artifactPath,
+      screenshotPath: screenshotCopyPath || mediaPath || null,
+    });
+
+    return {
+      ok: true,
+      artifactPath,
+      screenshotPath: screenshotCopyPath || mediaPath || null,
+    };
+  }
+
+  runStep(step, { targetId = null, context = {}, action, verify } = {}) {
+    this.log({ event: 'step-start', step, targetId, context });
+    this.currentStep = step;
+    this.currentTargetId = targetId;
+    this.currentStepContext = context;
+    try {
+      const actionResult = typeof action === 'function' ? action() : undefined;
+      const verifyResult = normalizeStepGateResult(typeof verify === 'function' ? verify(actionResult) : undefined);
+      if (!verifyResult.ok) {
+        throw new SkillError('step-gate', 'STEP_VERIFICATION_FAILED', `Step "${step}" verification failed.`, {
+          step,
+          targetId,
+          context,
+          verifyResult,
+          actionResult,
+        });
+      }
+      this.log({ event: 'step-ok', step, targetId, context, verifyResult });
+      this.currentStep = null;
+      this.currentTargetId = null;
+      this.currentStepContext = null;
+      return {
+        ok: true,
+        step,
+        actionResult,
+        verifyResult,
+      };
+    } catch (error) {
+      const evidence = this.captureFailureEvidence(step, { targetId, error, context });
+      let finalError = error;
+      if (finalError instanceof SkillError) {
+        finalError.data = {
+          ...(finalError.data || {}),
+          step,
+          targetId,
+          context,
+          evidence,
+        };
+      } else {
+        finalError = new SkillError('step-gate', 'STEP_EXECUTION_FAILED', String(error?.message || error), {
+          step,
+          targetId,
+          context,
+          evidence,
+        });
+      }
+      this.log({
+        event: 'step-failed',
+        step,
+        targetId,
+        context,
+        code: finalError?.code || null,
+        message: String(finalError?.message || finalError),
+        evidence,
+      });
+      this.currentStep = null;
+      this.currentTargetId = null;
+      this.currentStepContext = null;
+      throw finalError;
+    }
+  }
+
+  waitForCondition(label, fn, { timeoutMs = 4000, intervalMs = 180, ready = (value) => Boolean(value?.ok) } = {}) {
+    const startedAt = Date.now();
+    const attempts = [];
+
+    while (Date.now() - startedAt <= timeoutMs) {
+      let value;
+      try {
+        value = fn();
+      } catch (error) {
+        value = {
+          ok: false,
+          error: String(error?.message || error),
+        };
+      }
+
+      attempts.push(value);
+      if (ready(value)) {
+        return {
+          ok: true,
+          label,
+          elapsedMs: Date.now() - startedAt,
+          attempts,
+          result: value,
+        };
+      }
+
+      if (Date.now() - startedAt + intervalMs > timeoutMs) break;
+      this.waitMs(intervalMs);
+    }
+
+    return {
+      ok: false,
+      label,
+      elapsedMs: Date.now() - startedAt,
+      attempts,
+      result: attempts[attempts.length - 1] || null,
+    };
   }
 
   requiresForeground() {
@@ -248,7 +517,7 @@ export class PurePlayBrowserRunner {
         const raw = execFileSync('openclaw', base, {
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: 60000,
+          timeout: this.browserCommandTimeoutMs,
         });
         if (!parseJson) return raw;
         const trimmed = String(raw || '').trim();
@@ -475,6 +744,7 @@ export class PurePlayBrowserRunner {
   }
 
   fillRef(targetId, ref, value) {
+    this.log({ event: 'generic-fill-ref-used', targetId, ref });
     return fillRefTool(this, targetId, ref, value);
   }
 
@@ -491,7 +761,28 @@ export class PurePlayBrowserRunner {
   }
 
   clickButtonByLabel(targetId, labels = []) {
+    this.log({ event: 'generic-click-button-used', targetId, labels });
     return clickButtonByLabelTool(this, targetId, labels);
+  }
+
+  replaceVisibleLoginValue(targetId, kind, value) {
+    return replaceVisibleLoginValueTool(this, targetId, kind, value);
+  }
+
+  clickLoginButton(targetId) {
+    return clickLoginButtonTool(this, targetId);
+  }
+
+  replaceVisibleSearchValue(targetId, query, options = {}) {
+    return replaceVisibleSearchValueTool(this, targetId, query, options);
+  }
+
+  checkSearchQueryApplied(targetId, query) {
+    return checkSearchQueryAppliedTool(this, targetId, query);
+  }
+
+  ensureQueryGate(targetId, query, options = {}) {
+    return ensureQueryGateTool(this, targetId, query, options);
   }
 
   openPlaybackActionMenu(targetId, options = {}) {
@@ -552,5 +843,43 @@ export class PurePlayBrowserRunner {
 
   extractUsablePageBlocks(targetId) {
     return extractUsablePageBlocksTool(this, targetId);
+  }
+
+  navigateVerified(targetId, url, { settleMs = 900 } = {}) {
+    return this.runStep('navigate', {
+      targetId,
+      context: { url, settleMs },
+      action: () => {
+        this.navigate(targetId, url);
+        this.waitForLoad(targetId);
+        this.waitMs(settleMs);
+        return this.readPageState(targetId);
+      },
+      verify: (state) => ({
+        ok: Boolean(state?.url && String(state.url).startsWith(url)),
+        state,
+      }),
+    });
+  }
+
+  ensureQueryGateVerified(targetId, query, options = {}) {
+    return this.runStep('query-gate', {
+      targetId,
+      context: { query, options },
+      action: () => this.ensureQueryGate(targetId, query, options),
+      verify: (result) => ({ ok: Boolean(result?.ok), result }),
+    });
+  }
+
+  choosePlaybackActionVerified(targetId, labels = ['替换队列', '立即播放'], options = {}) {
+    return this.runStep('playback-action', {
+      targetId,
+      context: { labels, options },
+      action: () => this.choosePlaybackAction(targetId, labels, options),
+      verify: (result) => ({
+        ok: Boolean(result?.ok && result?.actualLabel),
+        result,
+      }),
+    });
   }
 }

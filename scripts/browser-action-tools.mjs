@@ -254,6 +254,41 @@ function clickDetailMoreOptions(runner, targetId) {
   return result?.result || result || {};
 }
 
+function waitForPlaybackActions(runner, targetId, preferredLabels, { timeoutMs = 2200, intervalMs = 180 } = {}) {
+  const wanted = preferredLabels.map((label) => normalizeMenuLabel(label));
+  if (typeof runner.waitForCondition !== 'function') {
+    const surface = inspectPlaybackActionSurface(runner, targetId);
+    const availableActions = surface?.visibleMenuItems || [];
+    const normalizedAvailable = availableActions.map((label) => normalizeMenuLabel(label));
+    return {
+      ok: normalizedAvailable.some((label) => wanted.includes(label)),
+      result: {
+        availableActions,
+        surface,
+      },
+    };
+  }
+
+  return runner.waitForCondition(
+    'playback-actions-visible',
+    () => {
+      const surface = inspectPlaybackActionSurface(runner, targetId);
+      const availableActions = surface?.visibleMenuItems || [];
+      const normalizedAvailable = availableActions.map((label) => normalizeMenuLabel(label));
+      return {
+        ok: normalizedAvailable.some((label) => wanted.includes(label)),
+        availableActions,
+        surface,
+      };
+    },
+    {
+      timeoutMs,
+      intervalMs,
+      ready: (value) => Boolean(value?.ok),
+    }
+  );
+}
+
 export function openPlaybackActionMenu(runner, targetId, { preferredLabels = ['替换队列', '立即播放'], waitMs = 350 } = {}) {
   const before = inspectPlaybackActionSurface(runner, targetId);
   const wanted = preferredLabels.map((label) => normalizeMenuLabel(label));
@@ -288,9 +323,10 @@ export function openPlaybackActionMenu(runner, targetId, { preferredLabels = ['�
     );
   }
 
-  runner.waitMs(waitMs);
-  const after = inspectPlaybackActionSurface(runner, targetId);
-  const availableActions = after?.visibleMenuItems || [];
+  const waited = waitForPlaybackActions(runner, targetId, preferredLabels, { timeoutMs: Math.max(waitMs * 6, 1200) });
+  if (!waited?.ok) runner.waitMs(waitMs);
+  const after = waited?.result?.surface || inspectPlaybackActionSurface(runner, targetId);
+  const availableActions = waited?.result?.availableActions || after?.visibleMenuItems || [];
   const normalizedAvailable = availableActions.map((label) => normalizeMenuLabel(label));
   if (!normalizedAvailable.some((label) => wanted.includes(label))) {
     throw new SkillError(
@@ -306,10 +342,11 @@ export function openPlaybackActionMenu(runner, targetId, { preferredLabels = ['�
     menuAlreadyOpen: false,
     clickedMoreOptions: true,
     detailHeading: after?.detailHeading || clickResult?.detailHeading || null,
-    availableActions,
-    surface: after,
-  };
-}
+      availableActions,
+      surface: after,
+      waited,
+    };
+  }
 
 export function choosePlaybackAction(runner, targetId, labels = ['替换队列', '立即播放'], options = {}) {
   const menuState = openPlaybackActionMenu(runner, targetId, { preferredLabels: labels, ...options });
@@ -338,8 +375,30 @@ export function choosePlaybackAction(runner, targetId, labels = ['替换队列',
     );
   }
 
-  runner.waitMs(options.waitMs ?? 350);
-  const postClickVisibleMenuItems = inspectPlaybackActionSurface(runner, targetId)?.visibleMenuItems || [];
+  const waitMs = options.waitMs ?? 350;
+  const postClickWait = typeof runner.waitForCondition === 'function'
+    ? runner.waitForCondition(
+        'playback-action-transition',
+        () => {
+          const surface = inspectPlaybackActionSurface(runner, targetId) || {};
+          const visibleMenuItems = surface?.visibleMenuItems || [];
+          const stillVisible = visibleMenuItems.some((label) => normalizeMenuLabel(label) === normalizeMenuLabel(actualLabel));
+          return {
+            ok: !stillVisible,
+            visibleMenuItems,
+            surface,
+            stillVisible,
+          };
+        },
+        {
+          timeoutMs: Math.max(waitMs * 8, 1400),
+          intervalMs: 180,
+          ready: (value) => Boolean(value?.ok),
+        }
+      )
+    : null;
+  if (!postClickWait) runner.waitMs(waitMs);
+  const postClickVisibleMenuItems = postClickWait?.result?.visibleMenuItems || inspectPlaybackActionSurface(runner, targetId)?.visibleMenuItems || [];
   return {
     ok: true,
     requestedLabels: labels,
@@ -347,5 +406,6 @@ export function choosePlaybackAction(runner, targetId, labels = ['替换队列',
     normalizedAction: normalizeMenuLabel(actualLabel),
     menuState,
     postClickVisibleMenuItems,
+    postClickWait,
   };
 }

@@ -4,3 +4,4 @@ secrets/
 !secrets/*.example
 *.local.json
 scripts/*.local.mjs
+data/failure-notify.local.json

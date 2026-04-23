@@ -84,7 +84,7 @@ export function replaceVisibleSearchValue(
   runner,
   targetId,
   query,
-  { label = '搜索', submit = true, triggerTrailingSpace = false } = {}
+  { label = '搜索', submit = true, triggerTrailingSpace = false, settleTimeoutMs = 2200, settleIntervalMs = 180 } = {}
 ) {
   const focus = focusVisibleSearchInput(runner, targetId, label);
   runner.press(targetId, 'Meta+A');
@@ -98,9 +98,28 @@ export function replaceVisibleSearchValue(
     runner.waitMs(220);
   }
   if (submit) runner.press(targetId, 'Enter');
-  const after = readVisibleSearchInput(runner, targetId, label);
   const expectedValue = triggerTrailingSpace ? `${query} ` : query;
-  const retained = normalizeWhitespace(after?.value || '') === normalizeWhitespace(expectedValue);
+  const settled = typeof runner.waitForCondition === 'function'
+    ? runner.waitForCondition(
+        'search-input-value-retained',
+        () => {
+          const after = readVisibleSearchInput(runner, targetId, label);
+          const retained = normalizeWhitespace(after?.value || '') === normalizeWhitespace(expectedValue);
+          return {
+            ok: retained,
+            after,
+            retained,
+          };
+        },
+        {
+          timeoutMs: settleTimeoutMs,
+          intervalMs: settleIntervalMs,
+          ready: (value) => Boolean(value?.retained),
+        }
+      )
+    : null;
+  const after = settled?.result?.after || readVisibleSearchInput(runner, targetId, label);
+  const retained = settled?.result?.retained ?? (normalizeWhitespace(after?.value || '') === normalizeWhitespace(expectedValue));
   return {
     ok: retained,
     focus,
@@ -109,6 +128,7 @@ export function replaceVisibleSearchValue(
     query: normalizeWhitespace(query),
     triggerTrailingSpace,
     expectedValue,
+    settled,
   };
 }
 
@@ -184,8 +204,19 @@ export function ensureQueryGate(runner, targetId, query, options = {}) {
         submit,
         triggerTrailingSpace,
       });
-      runner.waitMs(settleMs);
-      const gate = checkSearchQueryApplied(runner, targetId, query);
+      const settledGate = typeof runner.waitForCondition === 'function'
+        ? runner.waitForCondition(
+            'search-query-gate',
+            () => checkSearchQueryApplied(runner, targetId, query),
+            {
+              timeoutMs: settleMs,
+              intervalMs: 180,
+              ready: (value) => Boolean(value?.ok),
+            }
+          )
+        : null;
+      if (!settledGate) runner.waitMs(settleMs);
+      const gate = settledGate?.result || checkSearchQueryApplied(runner, targetId, query);
       const attempt = { reloadIndex, inputIndex, write, gate };
       attempts.push(attempt);
       if (gate.ok) {
