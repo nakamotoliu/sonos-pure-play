@@ -10,7 +10,8 @@ const LOG_DIR = path.join(SCRIPT_DIR, '..', 'logs');
 const RUN_RECORD_PATH = path.join(LOG_DIR, 'run-records.local.jsonl');
 const ARTIFACT_DIR = path.join(LOG_DIR, 'failure-artifacts.local');
 const PROFILE = process.env.OPENCLAW_BROWSER_PROFILE || 'openclaw';
-const TIMEOUT_MS = Number(process.env.SONOS_RUN_TIMEOUT_MS || 120000);
+const IDLE_TIMEOUT_MS = Number(process.env.SONOS_RUN_IDLE_TIMEOUT_MS || 45000);
+const HARD_TIMEOUT_MS = Number(process.env.SONOS_RUN_HARD_TIMEOUT_MS || 300000);
 
 function appendRunRecord(entry) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -79,7 +80,12 @@ async function main() {
   let buffer = '';
   let latestStep = null;
   let latestTargetId = null;
+  let lastProgressAt = Date.now();
   const tail = [];
+
+  const markProgress = () => {
+    lastProgressAt = Date.now();
+  };
 
   const onChunk = (chunk) => {
     const text = String(chunk || '');
@@ -97,6 +103,16 @@ async function main() {
         if (parsed?.phase === 'browser-runner' && parsed?.event === 'step-start') latestStep = parsed.step || latestStep;
         if (parsed?.targetId) latestTargetId = parsed.targetId;
         if (parsed?.verifyResult?.targetId) latestTargetId = parsed.verifyResult.targetId;
+        if (
+          parsed?.phase ||
+          parsed?.event ||
+          parsed?.kind ||
+          parsed?.step ||
+          parsed?.targetId ||
+          parsed?.verifyResult
+        ) {
+          markProgress();
+        }
       } catch {}
     }
   };
@@ -104,8 +120,12 @@ async function main() {
   child.stdout.on('data', onChunk);
   child.stderr.on('data', onChunk);
 
-  const timer = setTimeout(() => {
-    const step = latestStep || 'supervised-timeout';
+  let finalized = false;
+  const finalizeTimeout = (reason, timeoutMs) => {
+    if (finalized) return;
+    finalized = true;
+
+    const step = latestStep || reason;
     let screenshotPath = null;
     let artifactPath = null;
     let pageState = null;
@@ -124,21 +144,23 @@ async function main() {
       artifactPath = path.join(ARTIFACT_DIR, `${baseName(step)}.json`);
       fs.writeFileSync(artifactPath, JSON.stringify({
         ok: false,
-        reason: 'supervised-timeout',
+        reason,
         step,
         targetId: latestTargetId,
         profile: PROFILE,
-        timeoutMs: TIMEOUT_MS,
+        timeoutMs,
+        idleForMs: Date.now() - lastProgressAt,
         capturedAt: new Date().toISOString(),
         screenshotPath,
         pageState,
         logTail: tail,
       }, null, 2));
       appendRunRecord({
-        kind: 'supervised-timeout',
+        kind: reason,
         step,
         targetId: latestTargetId,
-        timeoutMs: TIMEOUT_MS,
+        timeoutMs,
+        idleForMs: Date.now() - lastProgressAt,
         artifactPath,
         screenshotPath,
       });
@@ -151,8 +173,8 @@ async function main() {
           targetId: latestTargetId,
           artifactPath,
           screenshotPath,
-          timeoutMs: TIMEOUT_MS,
-          error: { message: 'supervised-timeout' },
+          timeoutMs,
+          error: { message: reason },
         });
         appendRunRecord({ kind: 'failure-notified', notifyResult, artifactPath, screenshotPath });
       } catch (notifyError) {
@@ -166,10 +188,10 @@ async function main() {
       }
     } catch (error) {
       appendRunRecord({
-        kind: 'supervised-timeout-capture-failed',
+        kind: `${reason}-capture-failed`,
         step,
         targetId: latestTargetId,
-        timeoutMs: TIMEOUT_MS,
+        timeoutMs,
         message: String(error?.message || error),
       });
     }
@@ -178,10 +200,22 @@ async function main() {
     setTimeout(() => {
       if (!child.killed) child.kill('SIGKILL');
     }, 3000);
-  }, TIMEOUT_MS);
+  };
+
+  const watchdog = setInterval(() => {
+    const now = Date.now();
+    if (now - lastProgressAt >= IDLE_TIMEOUT_MS) {
+      finalizeTimeout('supervised-idle-timeout', IDLE_TIMEOUT_MS);
+    }
+  }, 1000);
+
+  const hardTimer = setTimeout(() => {
+    finalizeTimeout('supervised-hard-timeout', HARD_TIMEOUT_MS);
+  }, HARD_TIMEOUT_MS);
 
   child.on('exit', (code, signal) => {
-    clearTimeout(timer);
+    clearInterval(watchdog);
+    clearTimeout(hardTimer);
     process.stdout.write(buffer);
     appendRunRecord({
       kind: 'supervised-exit',
@@ -191,6 +225,7 @@ async function main() {
       signal,
       latestStep,
       latestTargetId,
+      idleForMs: Date.now() - lastProgressAt,
     });
     process.exit(code ?? (signal ? 1 : 0));
   });

@@ -182,8 +182,10 @@ The skill, not code, defines the business flow. Follow these steps in order and 
   - wait briefly and reread
   - reopen the fixed search page
   - rewrite the same query
+  - retry a different candidate under the same query before giving up on that query
   - reopen the playback menu through `openPlaybackActionMenu(...)` when the action surface is missing or stale
   - when playback verification reports a retryable failure, choose a different result and rerun the playback branch
+- Supervisor timeouts should prefer no-progress / idle detection plus a separate hard cap; do not treat a merely slow-but-progressing run as a final failure.
 - Prefer browser-runner helper methods over raw browser primitives for key-path actions. Raw `fill`, ad hoc `evaluate`, or generic button clicks are fallback-debug tools, not the normal playback path.
 - The first hard gate is query confirmation:
   - use `checkSearchQueryApplied(...)` or `ensureQueryGate(...)`

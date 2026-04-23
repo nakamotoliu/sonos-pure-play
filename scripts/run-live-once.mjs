@@ -15,10 +15,15 @@ import {
 import { analyzeIntent } from './intent.mjs';
 import { buildQueryPlan } from './query-planner.mjs';
 import { extractUsablePageBlocks, buildSelectionDecisionReport } from './browser-surface-tools.mjs';
-import { verifyMediaPlayback, isRetryablePlaybackVerificationFailure, MAX_PLAYBACK_ATTEMPTS } from './verify.mjs';
+import { verifyMediaPlayback, MAX_PLAYBACK_ATTEMPTS } from './verify.mjs';
 import { ACTION_PRIORITY, DEFAULT_ACTION } from './selectors.mjs';
-import { normalizeText } from './normalize.mjs';
 import { notifyFailureArtifact, notifySuccessArtifact, saveSuccessScreenshot } from './failure-notify.mjs';
+import {
+  buildCandidateAttemptPool,
+  DEFAULT_MAX_CANDIDATES_PER_QUERY,
+  shouldRetryWithNextCandidate,
+  shouldRetryWithNextQuery,
+} from './run-live-retry.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const RUN_RECORD_PATH = path.join(SCRIPT_DIR, '..', 'logs', 'run-records.local.jsonl');
@@ -80,11 +85,9 @@ function fail(phase, error, extra = {}) {
   process.exit(1);
 }
 
-function chooseCandidate(surface, intent) {
+function buildSelectionFromChosen(surface, chosen) {
   const candidates = surface?.usableBlocks?.candidates || [];
   const recommended = candidates.filter((c) => c.recommended);
-  const pool = recommended.length ? recommended : candidates;
-  const chosen = pool[0] || null;
   const topRecommended = surface?.usableBlocks?.selectionSummary?.topRecommended || null;
   const decisionReason = chosen
     ? (chosen.recommendedReason || (recommended.length ? 'recommended-by-ranker' : 'top-score'))
@@ -99,6 +102,15 @@ function chooseCandidate(surface, intent) {
       chosenType: chosen?.type || '',
       decisionReason,
     }),
+  };
+}
+
+function chooseCandidate(surface) {
+  const attemptPool = buildCandidateAttemptPool(surface, { maxCandidates: DEFAULT_MAX_CANDIDATES_PER_QUERY });
+  const chosen = attemptPool[0] || null;
+  return {
+    ...buildSelectionFromChosen(surface, chosen),
+    attemptPool,
   };
 }
 
@@ -242,73 +254,115 @@ try {
 
   for (const query of plan.queries.slice(0, 3)) {
     emit({ phase: 'query-attempt', query });
-    runner.navigateVerified(targetId, 'https://play.sonos.com/zh-cn/search', { settleMs: 1200 });
-    const queryGate = runner.ensureQueryGateVerified(targetId, query, { pageReloads: 1, inputAttempts: 2, settleMs: 1400 }).actionResult;
-    emit({ phase: 'query-gate', query, queryGate });
-
-    const surface = runner.runStep('surface-read', {
-      targetId,
-      context: { query, requestKind: plan.requestKind, strategy: plan.strategy },
-      action: () => extractUsablePageBlocks(runner, targetId, {
-        originalIntent: plan.originalIntent,
-        query,
-        requestKind: plan.requestKind,
-        strategy: plan.strategy,
-        allowedTypes: plan.allowedTypes,
-      }),
-      verify: (result) => ({ ok: Array.isArray(result?.usableBlocks?.candidates), resultSummary: result?.usableBlocks?.selectionSummary || null }),
-    }).actionResult;
-    emit({ phase: 'surface', query, summary: surface?.usableBlocks?.selectionSummary || null, candidates: (surface?.usableBlocks?.candidates || []).slice(0, 5) });
-
-    const selection = chooseCandidate(surface, intent);
-    emit({ phase: 'selection', query, selection });
-    if (!selection.chosen) {
-      lastError = new Error(`No candidate for query: ${query}`);
-      continue;
-    }
-
-    runner.runStep('candidate-click', {
-      targetId,
-      context: { query, title: selection?.chosen?.title || null, playLabel: selection?.chosen?.playLabel || null },
-      action: () => {
-        const clicked = clickCandidate(runner, targetId, selection.chosen);
-        runner.waitForLoad(targetId);
-        runner.waitMs(1000);
-        return {
-          clicked,
-          state: runner.readPageState(targetId),
-        };
-      },
-      verify: (result) => ({
-        ok: Boolean(result?.clicked?.ok || result?.state?.url),
-        result,
-      }),
-    });
-    const actionNames = ACTION_PRIORITY[intent.actionPreference || DEFAULT_ACTION] || ACTION_PRIORITY[DEFAULT_ACTION];
-    const playbackAction = runner.choosePlaybackActionVerified(targetId, actionNames, { waitMs: 400 }).actionResult;
-    emit({ phase: 'playback-action', query, playbackAction });
-
-    const afterStatus = getStatus(room);
-    const afterQueueJson = getQueueJson(room, 20);
 
     try {
-      const verified = verifyMediaPlayback({
-        room,
-        actionName: playbackAction.actualLabel,
-        postStatus: preStatus,
-        followupStatus: afterStatus,
-        followupQueueJson: afterQueueJson,
-        retryPlay: () => applyControlSteps(room, [{ kind: 'play' }]),
-        retrySnapshot: () => ({ status: getStatus(room), queueJson: getQueueJson(room, 20) }),
-        selectedContent: selection.chosen.title,
-        originalIntent: plan.originalIntent,
-      });
-      finalResult = { query, selection, verified, afterStatus, afterQueueJson };
-      break;
+      runner.navigateVerified(targetId, 'https://play.sonos.com/zh-cn/search', { settleMs: 1200 });
+      const queryGate = runner.ensureQueryGateVerified(targetId, query, { pageReloads: 1, inputAttempts: 2, settleMs: 1400 }).actionResult;
+      emit({ phase: 'query-gate', query, queryGate });
+
+      const surface = runner.runStep('surface-read', {
+        targetId,
+        context: { query, requestKind: plan.requestKind, strategy: plan.strategy },
+        action: () => extractUsablePageBlocks(runner, targetId, {
+          originalIntent: plan.originalIntent,
+          query,
+          requestKind: plan.requestKind,
+          strategy: plan.strategy,
+          allowedTypes: plan.allowedTypes,
+        }),
+        verify: (result) => ({ ok: Array.isArray(result?.usableBlocks?.candidates), resultSummary: result?.usableBlocks?.selectionSummary || null }),
+      }).actionResult;
+      emit({ phase: 'surface', query, summary: surface?.usableBlocks?.selectionSummary || null, candidates: (surface?.usableBlocks?.candidates || []).slice(0, 5) });
+
+      const selection = chooseCandidate(surface);
+      emit({ phase: 'selection', query, selection });
+      if (!selection.chosen) {
+        lastError = new Error(`No candidate for query: ${query}`);
+        continue;
+      }
+
+      const actionNames = ACTION_PRIORITY[intent.actionPreference || DEFAULT_ACTION] || ACTION_PRIORITY[DEFAULT_ACTION];
+
+      for (const chosenCandidate of selection.attemptPool) {
+        const candidateSelection = buildSelectionFromChosen(surface, chosenCandidate);
+        emit({ phase: 'candidate-attempt', query, chosenCandidate, decisionReason: candidateSelection.decisionReason });
+
+        try {
+          runner.runStep('candidate-click', {
+            targetId,
+            context: { query, title: chosenCandidate?.title || null, playLabel: chosenCandidate?.playLabel || null },
+            action: () => {
+              const clicked = clickCandidate(runner, targetId, chosenCandidate);
+              runner.waitForLoad(targetId);
+              runner.waitMs(1000);
+              return {
+                clicked,
+                state: runner.readPageState(targetId),
+              };
+            },
+            verify: (result) => ({
+              ok: Boolean(
+                result?.clicked?.ok && (
+                  (result?.state?.layers?.detail || []).length > 0 ||
+                  String(result?.state?.url || '').includes('/browse/services/') ||
+                  String(result?.state?.url || '').includes('/search')
+                )
+              ),
+              result,
+            }),
+          });
+
+          const playbackAction = runner.choosePlaybackActionVerified(targetId, actionNames, { waitMs: 400 }).actionResult;
+          emit({ phase: 'playback-action', query, playbackAction, chosenCandidate });
+
+          const afterStatus = getStatus(room);
+          const afterQueueJson = getQueueJson(room, 20);
+          const verified = verifyMediaPlayback({
+            room,
+            actionName: playbackAction.actualLabel,
+            postStatus: preStatus,
+            followupStatus: afterStatus,
+            followupQueueJson: afterQueueJson,
+            retryPlay: () => applyControlSteps(room, [{ kind: 'play' }]),
+            retrySnapshot: () => ({ status: getStatus(room), queueJson: getQueueJson(room, 20) }),
+            selectedContent: chosenCandidate.title,
+            originalIntent: plan.originalIntent,
+          });
+          finalResult = { query, selection: candidateSelection, verified, afterStatus, afterQueueJson };
+          break;
+        } catch (error) {
+          emit({
+            phase: 'candidate-failed',
+            query,
+            chosenCandidate,
+            message: error?.message || String(error),
+            code: error?.code || null,
+            retryNextCandidate: shouldRetryWithNextCandidate(error),
+            retryNextQuery: shouldRetryWithNextQuery(error),
+            data: error?.data || null,
+          });
+          lastError = error;
+          if (shouldRetryWithNextCandidate(error)) {
+            runner.navigateVerified(targetId, 'https://play.sonos.com/zh-cn/search', { settleMs: 900 });
+            runner.ensureQueryGateVerified(targetId, query, { pageReloads: 0, inputAttempts: 1, settleMs: 800 });
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (finalResult) break;
     } catch (error) {
-      emit({ phase: 'verify-failed', query, message: error?.message || String(error), code: error?.code || null, retryable: isRetryablePlaybackVerificationFailure(error), data: error?.data || null });
+      emit({
+        phase: 'query-failed',
+        query,
+        message: error?.message || String(error),
+        code: error?.code || null,
+        retryNextQuery: shouldRetryWithNextQuery(error),
+        data: error?.data || null,
+      });
       lastError = error;
-      if (!isRetryablePlaybackVerificationFailure(error)) break;
+      if (!shouldRetryWithNextQuery(error)) break;
     }
   }
 
