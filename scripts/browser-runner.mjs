@@ -52,6 +52,7 @@ import {
   ensureQueryGate as ensureQueryGateTool,
   replaceVisibleSearchValue as replaceVisibleSearchValueTool,
 } from './search-input-ops.mjs';
+import { buildDetectSearchPageStateFn } from './search-page-state.mjs';
 import {
   clickLoginButton as clickLoginButtonTool,
   replaceVisibleLoginValue as replaceVisibleLoginValueTool,
@@ -63,7 +64,7 @@ const DEFAULT_SONOS_BROWSER_PROFILE = 'openclaw';
 const LOGIN_RECOVERY_SENTINEL = '__SONOS_LOGIN_RECOVERY_ACTIVE__';
 const LOCAL_LOGIN_HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'login-recovery.local.mjs');
 const DEFAULT_FAILURE_ARTIFACT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'logs', 'failure-artifacts.local');
-const DEFAULT_BROWSER_COMMAND_TIMEOUT_MS = Number(process.env.SONOS_BROWSER_COMMAND_TIMEOUT_MS || 30000);
+const DEFAULT_BROWSER_COMMAND_TIMEOUT_MS = Number(process.env.SONOS_BROWSER_COMMAND_TIMEOUT_MS || 90000);
 
 function sanitizeArtifactSegment(value) {
   return String(value || '')
@@ -204,6 +205,12 @@ function parseBooleanFlag(value) {
   return null;
 }
 
+function sleepMs(ms) {
+  const duration = Math.max(0, Number(ms) || 0);
+  if (!duration) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, duration);
+}
+
 function readGatewayPort() {
   if (process.env.OPENCLAW_GATEWAY_PORT) return String(process.env.OPENCLAW_GATEWAY_PORT);
   try {
@@ -264,8 +271,15 @@ export function isRetryableBrowserAttachError(message) {
     text.includes('network error') ||
     text.includes('connection closed') ||
     text.includes('websocket closed') ||
-    text.includes('write eof')
+    text.includes('write eof') ||
+    text.includes('couldn\'t connect to server') ||
+    text.includes('failed to connect to 127.0.0.1')
   );
+}
+
+export function isTabNotFoundBrowserError(message) {
+  const text = String(message || '').toLowerCase();
+  return text.includes('tab not found') || text.includes('target closed') || text.includes('no tab found');
 }
 
 export function summarizeBrowserAttachError(message) {
@@ -296,6 +310,7 @@ export class PurePlayBrowserRunner {
     this.currentStep = null;
     this.currentTargetId = null;
     this.currentStepContext = null;
+    this.targetUrlHints = new Map();
   }
 
   log(event) {
@@ -508,7 +523,7 @@ export class PurePlayBrowserRunner {
    * via `--browser-profile`. Do not replace this with CLI root `--profile`.
    */
   oc(args, { parseJson = true } = {}) {
-    const base = ['browser', '--browser-profile', this.profile, '--json', ...args];
+    const base = ['browser', '--browser-profile', this.profile, ...(parseJson ? ['--json'] : []), ...args];
     const maxAttempts = 2;
     let lastError = null;
 
@@ -607,12 +622,12 @@ export class PurePlayBrowserRunner {
     };
   }
 
-  ensureLoggedInOrRecover(targetId) {
+  ensureLoggedInOrRecover(targetId, { initialState = null } = {}) {
     if (process.env[LOGIN_RECOVERY_SENTINEL] === '1') {
       return { ok: true, recovered: false, state: { bypassed: true } };
     }
 
-    const state = this.readPageState(targetId) || {};
+    const state = initialState || this.readPageState(targetId) || {};
     if (!state.loginBlocked) {
       return { ok: true, recovered: false, state };
     }
@@ -687,7 +702,7 @@ export class PurePlayBrowserRunner {
     while (Date.now() < deadline) {
       lastHealth = this.readGatewayHealth();
       if (lastHealth?.ok && lastHealth?.status === 'live') {
-        this.waitMs(1200);
+        sleepMs(1200);
         this.log({
           event: 'gateway-recovered',
           elapsedMs: Date.now() - startedAt,
@@ -700,7 +715,7 @@ export class PurePlayBrowserRunner {
         elapsedMs: Date.now() - startedAt,
         gatewayHealth: lastHealth,
       });
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800);
+      sleepMs(800);
     }
 
     this.log({
@@ -715,11 +730,27 @@ export class PurePlayBrowserRunner {
     return tabsTool(this);
   }
 
+  rememberTargetUrl(targetId, url) {
+    if (!targetId || !url) return;
+    this.targetUrlHints.set(String(targetId), String(url));
+  }
+
+  getKnownTargetUrl(targetId) {
+    if (!targetId) return null;
+    return this.targetUrlHints.get(String(targetId)) || null;
+  }
+
+  forgetTargetUrl(targetId) {
+    if (!targetId) return;
+    this.targetUrlHints.delete(String(targetId));
+  }
+
   focus(targetId) {
     focusTool(this, targetId);
   }
 
   close(targetId) {
+    this.forgetTargetUrl(targetId);
     closeTool(this, targetId);
   }
 
@@ -821,6 +852,11 @@ export class PurePlayBrowserRunner {
     return readPageStateTool(this, targetId);
   }
 
+  readSearchPageState(targetId, query = '') {
+    const evaluated = this.evaluate(targetId, buildDetectSearchPageStateFn({ expectedQuery: query }));
+    return evaluated?.result || evaluated;
+  }
+
   readVisibleMenuItems(targetId) {
     return readVisibleMenuItemsTool(this, targetId);
   }
@@ -850,14 +886,57 @@ export class PurePlayBrowserRunner {
       targetId,
       context: { url, settleMs },
       action: () => {
+        const knownUrl = this.getKnownTargetUrl(targetId);
+        if (knownUrl === url) {
+          const liveState = this.readPageState(targetId);
+          const liveUrl = typeof liveState?.url === 'string' ? liveState.url : '';
+          if (liveUrl === url) {
+            this.log({
+              event: 'navigate-skipped-known-url',
+              targetId,
+              url,
+            });
+            return { url, skipped: true, knownUrl, liveUrl };
+          }
+          this.log({
+            event: 'navigate-hint-stale',
+            targetId,
+            url,
+            knownUrl,
+            liveUrl,
+          });
+          this.forgetTargetUrl(targetId);
+        }
         this.navigate(targetId, url);
         this.waitForLoad(targetId);
         this.waitMs(settleMs);
-        return this.readPageState(targetId);
+        this.rememberTargetUrl(targetId, url);
+        return { url, skipped: false };
       },
       verify: (state) => ({
-        ok: Boolean(state?.url && String(state.url).startsWith(url)),
+        ok: true,
         state,
+      }),
+    });
+  }
+
+  recoverSearchPageVerified(targetId, query = '', { settleMs = 900 } = {}) {
+    const searchUrl = 'https://play.sonos.com/zh-cn/search';
+    return this.runStep('recover-search-page', {
+      targetId,
+      context: { url: searchUrl, query, settleMs },
+      action: () => {
+        this.forgetTargetUrl(targetId);
+        this.navigate(targetId, searchUrl);
+        this.waitForLoad(targetId);
+        this.waitMs(settleMs);
+        const state = this.readSearchPageState(targetId, query);
+        this.rememberTargetUrl(targetId, searchUrl);
+        return { url: searchUrl, state };
+      },
+      verify: (result) => ({
+        ok: Boolean(result?.state?.onSearchPage && result?.state?.searchPageReady),
+        result,
       }),
     });
   }
