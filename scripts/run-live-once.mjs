@@ -27,6 +27,31 @@ import {
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const RUN_RECORD_PATH = path.join(SCRIPT_DIR, '..', 'logs', 'run-records.local.jsonl');
+const MAX_QUERY_ATTEMPTS = Number(process.env.SONOS_MAX_QUERY_ATTEMPTS || 2);
+const NAVIGATE_SETTLE_MS = Number(process.env.SONOS_NAVIGATE_SETTLE_MS || 400);
+const QUERY_GATE_SETTLE_MS = Number(process.env.SONOS_QUERY_GATE_SETTLE_MS || 500);
+const QUERY_GATE_RETRY_SETTLE_MS = Number(process.env.SONOS_QUERY_GATE_RETRY_SETTLE_MS || 350);
+const CANDIDATE_CLICK_POST_LOAD_WAIT_MS = Number(process.env.SONOS_CANDIDATE_CLICK_POST_LOAD_WAIT_MS || 250);
+const PLAYBACK_ACTION_WAIT_MS = Number(process.env.SONOS_PLAYBACK_ACTION_WAIT_MS || 200);
+
+function ensureFreshSearchResults(runner, targetId, query, { settleMs = QUERY_GATE_SETTLE_MS, recoverySettleMs = NAVIGATE_SETTLE_MS } = {}) {
+  const first = runner.ensureQueryGateVerified(targetId, query, { pageReloads: 0, inputAttempts: 1, settleMs }).actionResult;
+  const firstState = first?.attempt?.gate?.state || first?.attempt?.gate || {};
+  const firstFresh = Boolean(firstState?.onSearchPage && firstState?.searchPageReady && firstState?.resultsFreshForExpectedQuery);
+  if (firstFresh) return { queryGate: first, recovered: false };
+
+  emit({
+    phase: 'query-gate-recover-search-page',
+    query,
+    reason: firstState?.pageKind || 'not-fresh',
+    onSearchPage: Boolean(firstState?.onSearchPage),
+    searchPageReady: Boolean(firstState?.searchPageReady),
+    resultsFreshForExpectedQuery: Boolean(firstState?.resultsFreshForExpectedQuery),
+  });
+  runner.recoverSearchPageVerified(targetId, query, { settleMs: recoverySettleMs });
+  const second = runner.ensureQueryGateVerified(targetId, query, { pageReloads: 0, inputAttempts: 1, settleMs }).actionResult;
+  return { queryGate: second, recovered: true };
+}
 
 function appendRunRecord(entry) {
   fs.mkdirSync(path.dirname(RUN_RECORD_PATH), { recursive: true });
@@ -231,6 +256,7 @@ try {
     verify: (result) => ({ ok: Boolean(result?.roomVisible || result?.roomCardFound), result }),
   }).actionResult;
   emit({ phase: 'room-sync-before', roomSync });
+  let roomSyncAfter = roomSync;
   if (!roomSync?.activeRoomConfirmed) {
     const activate = runner.runStep('room-sync-activate', {
       targetId,
@@ -239,26 +265,33 @@ try {
       verify: (result) => ({ ok: Boolean(result?.ok), result }),
     }).actionResult;
     emit({ phase: 'room-sync-click', activate });
-    runner.waitMs(800);
+    runner.waitMs(200);
+    roomSyncAfter = runner.runStep('room-sync-read-after', {
+      targetId,
+      context: { room },
+      action: () => runner.readRoomSyncState(targetId, room),
+      verify: (result) => ({ ok: Boolean(result?.activeRoomConfirmed || result?.roomCardFound), result }),
+    }).actionResult;
+  } else {
+    emit({ phase: 'room-sync-after-skipped', reason: 'already-active', room });
   }
-  const roomSyncAfter = runner.runStep('room-sync-read-after', {
-    targetId,
-    context: { room },
-    action: () => runner.readRoomSyncState(targetId, room),
-    verify: (result) => ({ ok: Boolean(result?.activeRoomConfirmed || result?.roomCardFound), result }),
-  }).actionResult;
   emit({ phase: 'room-sync-after', roomSyncAfter });
 
   let finalResult = null;
   let lastError = null;
 
-  for (const query of plan.queries.slice(0, 3)) {
+  for (const query of plan.queries.slice(0, MAX_QUERY_ATTEMPTS)) {
     emit({ phase: 'query-attempt', query });
 
     try {
-      runner.navigateVerified(targetId, 'https://play.sonos.com/zh-cn/search', { settleMs: 1200 });
-      const queryGate = runner.ensureQueryGateVerified(targetId, query, { pageReloads: 1, inputAttempts: 2, settleMs: 1400 }).actionResult;
-      emit({ phase: 'query-gate', query, queryGate });
+      runner.recoverSearchPageVerified(targetId, query, { settleMs: NAVIGATE_SETTLE_MS });
+      const { queryGate, recovered } = ensureFreshSearchResults(runner, targetId, query, { settleMs: QUERY_GATE_SETTLE_MS });
+      emit({ phase: 'query-gate', query, queryGate, recovered });
+      const gateState = queryGate?.attempt?.gate?.state || queryGate?.attempt?.gate || {};
+      const readyForCandidateExtraction = Boolean(gateState?.onSearchPage && gateState?.searchPageReady && gateState?.resultsFreshForExpectedQuery);
+      if (!readyForCandidateExtraction) {
+        throw new Error(`Search results not fresh for query: ${query}`);
+      }
 
       const surface = runner.runStep('surface-read', {
         targetId,
@@ -294,7 +327,7 @@ try {
             action: () => {
               const clicked = clickCandidate(runner, targetId, chosenCandidate);
               runner.waitForLoad(targetId);
-              runner.waitMs(1000);
+              runner.waitMs(CANDIDATE_CLICK_POST_LOAD_WAIT_MS);
               return {
                 clicked,
                 state: runner.readPageState(targetId),
@@ -312,7 +345,7 @@ try {
             }),
           });
 
-          const playbackAction = runner.choosePlaybackActionVerified(targetId, actionNames, { waitMs: 400 }).actionResult;
+          const playbackAction = runner.choosePlaybackActionVerified(targetId, actionNames, { waitMs: PLAYBACK_ACTION_WAIT_MS }).actionResult;
           emit({ phase: 'playback-action', query, playbackAction, chosenCandidate });
 
           const afterStatus = getStatus(room);
@@ -343,8 +376,8 @@ try {
           });
           lastError = error;
           if (shouldRetryWithNextCandidate(error)) {
-            runner.navigateVerified(targetId, 'https://play.sonos.com/zh-cn/search', { settleMs: 900 });
-            runner.ensureQueryGateVerified(targetId, query, { pageReloads: 0, inputAttempts: 1, settleMs: 800 });
+            runner.recoverSearchPageVerified(targetId, query, { settleMs: 250 });
+            ensureFreshSearchResults(runner, targetId, query, { settleMs: QUERY_GATE_RETRY_SETTLE_MS, recoverySettleMs: 250 });
             continue;
           }
           throw error;

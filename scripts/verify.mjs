@@ -18,14 +18,23 @@ function groupIncludesRoom(group, room) {
   return String(group).toLowerCase().includes(String(room).toLowerCase());
 }
 
-function titleMatchesIntent(finalTitle, selectedContent, originalIntent) {
+function titleMatchesIntent(finalTitle, selectedContent, originalIntent, followupQueueJson) {
   const finalKey = normalizeText(finalTitle || '');
   const selectedKey = normalizeText(selectedContent || '');
   const intentKey = normalizeText(originalIntent || '');
   if (!finalKey) return false;
-  return Boolean(
+  if (
     (selectedKey && (finalKey.includes(selectedKey) || selectedKey.includes(finalKey))) ||
     (intentKey && (finalKey.includes(intentKey) || intentKey.includes(finalKey)))
+  ) {
+    return true;
+  }
+  const queueText = normalizeText(JSON.stringify(followupQueueJson || {}));
+  return Boolean(
+    queueText && (
+      (selectedKey && queueText.includes(selectedKey)) ||
+      (intentKey && queueText.includes(intentKey))
+    )
   );
 }
 
@@ -78,7 +87,7 @@ export function verifyMediaPlayback({
   const queueItems = Array.isArray(effectiveQueueJson?.items) ? effectiveQueueJson.items.length : 0;
   const titleChanged = Boolean(finalTitle && finalTitle !== previousTitle);
   const trackChanged = Boolean(finalTrack && finalTrack !== previousTrack);
-  const intentMatched = titleMatchesIntent(finalTitle, selectedContent, originalIntent);
+  const intentMatched = titleMatchesIntent(finalTitle, selectedContent, originalIntent, effectiveQueueJson);
 
   const cliSignals = {
     playing: true,
@@ -88,8 +97,8 @@ export function verifyMediaPlayback({
     intentMatched,
   };
 
-  if (!queueItems && !titleChanged && !trackChanged && !intentMatched) {
-    throw new SkillError('verify-cli', 'CLI_VERIFY_FAILED', 'Sonos CLI reported PLAYING, but it did not expose a queue, a track change, or a title match with the requested content.', {
+  if (!intentMatched) {
+    throw new SkillError('verify-cli', 'CLI_VERIFY_FAILED', 'Sonos CLI reported PLAYING, but the playing title does not match the selected/requested content.', {
       room,
       actionName,
       cliSignals,
@@ -99,7 +108,7 @@ export function verifyMediaPlayback({
       finalTrack: finalTrack || null,
       selectedContent: selectedContent || null,
       originalIntent: originalIntent || null,
-      ...buildRetryMeta('playing-without-content-match', true),
+      ...buildRetryMeta(titleChanged || trackChanged ? 'playing-content-mismatch' : 'playing-without-content-match', true),
     });
   }
 
@@ -109,9 +118,7 @@ export function verifyMediaPlayback({
     executionMatched: true,
     matchedBy: intentMatched
       ? 'cli-title-match'
-      : titleChanged || trackChanged
-        ? 'cli-track-change'
-        : 'cli-queue-present',
+      : 'cli-track-change',
     cliSignals,
     finalState: effectiveStatus?.state || null,
     finalTitle: finalTitle || null,

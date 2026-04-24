@@ -77,6 +77,7 @@ export function rankCandidates({
       poolState,
       now,
       query,
+      tokens,
     });
     return {
       selected: playlistFirst.selected,
@@ -113,54 +114,87 @@ export function rankCandidates({
   };
 }
 
-function rankPlaylistFirstCandidates({ candidates, playbackHistory, poolState, now, query }) {
-  const orderedPlaylists = (Array.isArray(candidates) ? candidates : [])
+function rankPlaylistFirstCandidates({ candidates, playbackHistory, poolState, now, query, tokens }) {
+  const allCandidates = Array.isArray(candidates) ? candidates : [];
+  const typePriority = TYPE_PRIORITIES.playlist || TYPE_PRIORITIES.generic;
+  const scoredCandidates = allCandidates
+    .map((candidate, index) => ({
+      ...scoreCandidate({ candidate, query, tokens, typePriority, playbackHistory, now, poolState }),
+      orderIndex: index,
+    }));
+
+  const orderedPlaylists = scoredCandidates
     .filter((candidate) => normalizeText(candidate.type) === 'playlist')
-    .map((candidate, index) => {
-      const title = normalizeWhitespace(candidate.title || candidate.clickLabel || '');
-      const normalizedTitle = normalizeText(title);
-      const historyPenalty = scoreHistoryPenalty({
-        candidate: { ...candidate, title },
-        history: playbackHistory,
-        now,
-        query,
-      });
+    .map((candidate) => {
+      const normalizedTitle = normalizeText(candidate.title || '');
       const playedInPool = Boolean(
         normalizedTitle &&
         Array.isArray(poolState?.playedInPool) &&
         poolState.playedInPool.some((entry) => normalizeText(entry) === normalizedTitle)
       );
-      const historyScore = historyPenalty.total;
       return {
         ...candidate,
-        title,
-        score: historyScore - index * 0.01,
-        orderIndex: index,
         eligible: !playedInPool,
         skipReason: playedInPool ? 'played-in-visible-pool' : null,
-        historyScore,
-        historyReasons: historyPenalty.reasons,
         playedInPool,
       };
     })
     .sort((left, right) => {
       if (left.eligible !== right.eligible) return left.eligible ? -1 : 1;
+      if ((right.semanticMatchCount || 0) !== (left.semanticMatchCount || 0)) {
+        return (right.semanticMatchCount || 0) - (left.semanticMatchCount || 0);
+      }
       if (right.score !== left.score) return right.score - left.score;
       return left.orderIndex - right.orderIndex;
     });
 
-  const selected = orderedPlaylists.find((candidate) => candidate.eligible)
-    || orderedPlaylists[0]
+  let selected = orderedPlaylists.find((candidate) => candidate.eligible && (candidate.semanticMatchCount || 0) > 0)
+    || orderedPlaylists.find((candidate) => (candidate.semanticMatchCount || 0) > 0)
     || null;
+  let ranked = orderedPlaylists;
+  let fallbackUsed = false;
+
+  if (!selected) {
+    const fallbackRanked = scoredCandidates
+      .filter((candidate) => (candidate.semanticMatchCount || 0) > 0)
+      .sort((left, right) => {
+        if (right.score !== left.score) return right.score - left.score;
+        return left.orderIndex - right.orderIndex;
+      });
+    selected = fallbackRanked[0] || null;
+    if (fallbackRanked.length) {
+      ranked = fallbackRanked;
+      fallbackUsed = true;
+    }
+  }
+
+  if (!selected) {
+    const anyPlayableRanked = [
+      ...orderedPlaylists,
+      ...scoredCandidates.filter((candidate) => !orderedPlaylists.includes(candidate)),
+    ].sort((left, right) => {
+      if (left.eligible !== right.eligible) return left.eligible ? -1 : 1;
+      if (right.score !== left.score) return right.score - left.score;
+      return left.orderIndex - right.orderIndex;
+    });
+    selected = anyPlayableRanked[0]
+      ? { ...anyPlayableRanked[0], fallbackPlayableCandidate: true }
+      : null;
+    if (selected) {
+      fallbackUsed = true;
+      ranked = [selected, ...anyPlayableRanked.slice(1)];
+    }
+  }
 
   return {
     selected,
-    ranked: orderedPlaylists,
+    ranked,
     debug: {
       active: true,
       selectedTitle: selected?.title || null,
       poolExhausted: Boolean(poolState?.poolExhausted),
-      considered: orderedPlaylists.map((candidate) => ({
+      fallbackUsed,
+      considered: ranked.map((candidate) => ({
         orderIndex: candidate.orderIndex,
         title: candidate.title,
         targetIndex: candidate.targetIndex ?? null,
@@ -168,8 +202,8 @@ function rankPlaylistFirstCandidates({ candidates, playbackHistory, poolState, n
         eligible: candidate.eligible,
         skipReason: candidate.skipReason,
         playedInPool: candidate.playedInPool,
-        historyScore: candidate.historyScore,
-        historyReasons: candidate.historyReasons,
+        score: candidate.score,
+        semanticMatchCount: candidate.semanticMatchCount || 0,
       })),
     },
   };
@@ -180,6 +214,7 @@ function scoreCandidate({ candidate, query, tokens, typePriority, playbackHistor
   const haystack = normalizeText([title, candidate.scopeText, candidate.sectionLabel, candidate.service].filter(Boolean).join(' '));
   const breakdown = [];
   let score = typePriority[candidate.type] ?? 0;
+  let queryMatchCount = 0;
   breakdown.push({ kind: 'type', value: typePriority[candidate.type] ?? 0 });
 
   for (const [bucket, bucketInfo] of Object.entries(TERM_BUCKETS)) {
@@ -197,10 +232,15 @@ function scoreCandidate({ candidate, query, tokens, typePriority, playbackHistor
     breakdown.push({ kind: 'adjacency', value: adjacentBonus });
   }
 
-  const queryTokens = normalizeText(query).split(' ').filter(Boolean);
+  const queryTokens = [...new Set([
+    ...normalizeText(query).split(' ').filter(Boolean),
+    ...extractIntentTokens(normalizeWhitespace(query), tokens.core).map((token) => normalizeText(token)),
+  ])].filter(Boolean);
   for (const token of queryTokens) {
+    if (!token || token.length < 2) continue;
     if (haystack.includes(token)) {
       score += 3;
+      queryMatchCount += 1;
       breakdown.push({ kind: 'query', token, value: 3 });
     }
   }
@@ -215,6 +255,12 @@ function scoreCandidate({ candidate, query, tokens, typePriority, playbackHistor
   }
 
   const intentMatches = tokens.intent.filter((token) => haystack.includes(normalizeText(token))).length;
+  const semanticMatchCount = queryMatchCount + intentMatches;
+  if (tokens.intent.length && semanticMatchCount === 0) {
+    score -= 24;
+    breakdown.push({ kind: 'semantic-miss', value: -24 });
+  }
+
   if (candidate.type === 'playlist' && tokens.intent.length && intentMatches === 0) {
     score -= 18;
     breakdown.push({ kind: 'query-drift', value: -18 });
@@ -254,6 +300,9 @@ function scoreCandidate({ candidate, query, tokens, typePriority, playbackHistor
     title,
     score,
     breakdown,
+    queryMatchCount,
+    intentMatchCount: intentMatches,
+    semanticMatchCount,
   };
 }
 

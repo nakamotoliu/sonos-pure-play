@@ -51,6 +51,26 @@ test('marks playing-without-content-match verification failure as retryable', ()
   );
 });
 
+test('marks playing content mismatch with track change as retryable', () => {
+  assert.throws(
+    () => verifyMediaPlayback({
+      room: '客厅 play5',
+      actionName: '替换队列',
+      postStatus: { group: '客厅 play5', state: 'PLAYING', title: '寒武纪', track: '1' },
+      followupStatus: { group: '客厅 play5', state: 'PLAYING', title: '笑忘书', track: '10' },
+      followupQueueJson: { items: [{ id: 1 }] },
+      selectedContent: '复古爵士欢快',
+      originalIntent: '欢快周末爵士',
+    }),
+    (error) => {
+      assert.equal(error.code, 'CLI_VERIFY_FAILED');
+      assert.equal(isRetryablePlaybackVerificationFailure(error), true);
+      assert.equal(error.data.retryReason, 'playing-content-mismatch');
+      return true;
+    }
+  );
+});
+
 test('marks group mismatch as non-retryable verification failure', () => {
   assert.throws(
     () => verifyMediaPlayback({

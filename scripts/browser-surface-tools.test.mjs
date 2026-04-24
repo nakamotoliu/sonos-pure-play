@@ -76,3 +76,26 @@ test('builds a decision report comparing recommendation and final choice', () =>
   assert.equal(report.deviation, true);
   assert.equal(report.decisionReason, 'top candidate was not clickable');
 });
+
+test('playlist mood requests always expose a fallback recommendation when results exist', () => {
+  const enriched = enrichUsablePageBlocks({
+    usableBlocks: {
+      candidates: [
+        { title: '复古爵士欢快', playLabel: '播放复古爵士欢快', canClick: true },
+        { title: '高级 欢快 爵士', playLabel: '播放高级 欢快 爵士', canClick: true },
+      ],
+    },
+    originalIntent: '欢快周末爵士',
+    query: '欢快周末爵士',
+    requestKind: 'playlist',
+    strategy: 'playlist-first',
+    allowedTypes: ['playlist'],
+    playbackHistory: [],
+  });
+
+  assert.ok(enriched.selectionSummary.selectedByRanker);
+  assert.ok(enriched.selectionSummary.topRecommended);
+  assert.equal(enriched.candidates[0].recommended, true);
+  assert.equal(enriched.candidates[0].recommendedReason, 'fallback-playable-candidate');
+  assert.ok(enriched.candidates[0].playLabel);
+});
