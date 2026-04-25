@@ -115,7 +115,7 @@ export function rankCandidates({
 }
 
 function rankPlaylistFirstCandidates({ candidates, playbackHistory, poolState, now, query, tokens }) {
-  const allCandidates = Array.isArray(candidates) ? candidates : [];
+  const allCandidates = applyArtistIntentGuard(Array.isArray(candidates) ? candidates : [], tokens);
   const typePriority = TYPE_PRIORITIES.playlist || TYPE_PRIORITIES.generic;
   const scoredCandidates = allCandidates
     .map((candidate, index) => ({
@@ -207,6 +207,24 @@ function rankPlaylistFirstCandidates({ candidates, playbackHistory, poolState, n
       })),
     },
   };
+}
+
+function applyArtistIntentGuard(candidates, tokens) {
+  const artistTokens = (tokens?.intent || [])
+    .map((token) => normalizeText(token))
+    .filter((token) => token.length >= 2);
+  if (!artistTokens.length) return candidates;
+
+  const hasArtistMatches = candidates.some((candidate) => {
+    const haystack = normalizeText([candidate.title, candidate.scopeText, candidate.sectionLabel, candidate.service].filter(Boolean).join(' '));
+    return artistTokens.some((token) => haystack.includes(token));
+  });
+  if (!hasArtistMatches) return candidates;
+
+  return candidates.filter((candidate) => {
+    const haystack = normalizeText([candidate.title, candidate.scopeText, candidate.sectionLabel, candidate.service].filter(Boolean).join(' '));
+    return artistTokens.some((token) => haystack.includes(token));
+  });
 }
 
 function scoreCandidate({ candidate, query, tokens, typePriority, playbackHistory, now, poolState }) {

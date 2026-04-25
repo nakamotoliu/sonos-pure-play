@@ -139,10 +139,65 @@ function chooseCandidate(surface) {
   };
 }
 
-function clickCandidate(runner, targetId, chosen) {
+function clickCandidateAndReadDetail(runner, targetId, chosen, { timeoutMs = 9000, intervalMs = 180 } = {}) {
   const playLabel = chosen?.playLabel || '';
   if (!playLabel) throw new Error('chosen candidate has no playLabel');
-  const clicked = runner.clickButtonByLabel(targetId, [playLabel]);
+  const result = runner.evaluate(
+    targetId,
+    `async () => {
+      const wantedLabel = ${JSON.stringify(playLabel)};
+      const timeoutMs = ${Number(timeoutMs)};
+      const intervalMs = ${Number(intervalMs)};
+      const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+      const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+      const textOf = (el) => normalize(el?.getAttribute?.('aria-label') || el?.textContent || '');
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const buttons = [...document.querySelectorAll('button,[role="button"],a,[role="link"]')].filter(visible);
+      const target = buttons.find((el) => textOf(el) === wantedLabel) || null;
+      if (!target) {
+        return {
+          ok: false,
+          reason: 'button-not-found',
+          clicked: null,
+          visibleButtons: buttons.map((el) => textOf(el)).filter(Boolean).slice(0, 40),
+        };
+      }
+      target.click();
+      const startedAt = Date.now();
+      let state = null;
+      while (Date.now() - startedAt <= timeoutMs) {
+        const main = document.querySelector('main') || document.body;
+        const text = normalize(main?.innerText || document.body?.innerText || '');
+        const detail = [...document.querySelectorAll('main h1, main h2, main [role="heading"], main button')]
+          .filter(visible)
+          .map((el) => textOf(el))
+          .filter(Boolean);
+        const hasDetail = detail.some((label) => label === '更多选项' || label.startsWith('随机播放'));
+        state = {
+          url: location.href,
+          title: document.title || '',
+          appError: /Application error|应用错误/.test(text),
+          bootstrapBlank: !text,
+          loginBlocked: /登录|Sign in|Log in/.test(text),
+          challengeRequired: /captcha|challenge|验证/.test(text),
+          layers: {
+            detail: hasDetail || location.href.includes('/browse/services/') ? detail.slice(0, 120) : [],
+            search: text ? [text.slice(0, 1200)] : [],
+          },
+        };
+        if (state.appError || state.loginBlocked || state.challengeRequired) break;
+        if (location.href.includes('/browse/services/') || state.layers.detail.length > 0) break;
+        await sleep(intervalMs);
+      }
+      return {
+        ok: true,
+        clicked: wantedLabel,
+        state,
+        elapsedMs: Date.now() - startedAt,
+      };
+    }`
+  );
+  const clicked = result?.result || result;
   if (!clicked?.ok) throw new Error(`candidate click failed: ${playLabel}`);
   return clicked;
 }
@@ -325,12 +380,12 @@ try {
             targetId,
             context: { query, title: chosenCandidate?.title || null, playLabel: chosenCandidate?.playLabel || null },
             action: () => {
-              const clicked = clickCandidate(runner, targetId, chosenCandidate);
-              runner.waitForLoad(targetId);
-              runner.waitMs(CANDIDATE_CLICK_POST_LOAD_WAIT_MS);
+              const clicked = clickCandidateAndReadDetail(runner, targetId, chosenCandidate, {
+                timeoutMs: Math.max(CANDIDATE_CLICK_POST_LOAD_WAIT_MS, 9000),
+              });
               return {
                 clicked,
-                state: runner.readPageState(targetId),
+                state: clicked.state,
               };
             },
             verify: (result) => ({
