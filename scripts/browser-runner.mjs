@@ -473,7 +473,7 @@ export class PurePlayBrowserRunner {
     }
   }
 
-  waitForCondition(label, fn, { timeoutMs = 4000, intervalMs = 180, ready = (value) => Boolean(value?.ok) } = {}) {
+  waitForCondition(label, fn, { timeoutMs = 4000, intervalMs = 0, ready = (value) => Boolean(value?.ok) } = {}) {
     const startedAt = Date.now();
     const attempts = [];
 
@@ -499,7 +499,7 @@ export class PurePlayBrowserRunner {
         };
       }
 
-      if (Date.now() - startedAt + intervalMs > timeoutMs) break;
+      if (!intervalMs || Date.now() - startedAt + intervalMs > timeoutMs) break;
       this.waitMs(intervalMs);
     }
 

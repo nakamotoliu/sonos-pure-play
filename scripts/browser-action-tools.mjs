@@ -333,39 +333,18 @@ function clickDetailMoreOptions(runner, targetId) {
   return result?.result || result || {};
 }
 
-function waitForPlaybackActions(runner, targetId, preferredLabels, { timeoutMs = 1200, intervalMs = 120 } = {}) {
+function waitForPlaybackActions(runner, targetId, preferredLabels) {
   const wanted = preferredLabels.map((label) => normalizeMenuLabel(label));
-  if (typeof runner.waitForCondition !== 'function') {
-    const surface = inspectPlaybackActionSurface(runner, targetId);
-    const availableActions = surface?.visibleMenuItems || [];
-    const normalizedAvailable = availableActions.map((label) => normalizeMenuLabel(label));
-    return {
-      ok: normalizedAvailable.some((label) => wanted.includes(label)),
-      result: {
-        availableActions,
-        surface,
-      },
-    };
-  }
-
-  return runner.waitForCondition(
-    'playback-actions-visible',
-    () => {
-      const surface = inspectPlaybackActionSurface(runner, targetId);
-      const availableActions = surface?.visibleMenuItems || [];
-      const normalizedAvailable = availableActions.map((label) => normalizeMenuLabel(label));
-      return {
-        ok: normalizedAvailable.some((label) => wanted.includes(label)),
-        availableActions,
-        surface,
-      };
+  const surface = inspectPlaybackActionSurface(runner, targetId);
+  const availableActions = surface?.visibleMenuItems || [];
+  const normalizedAvailable = availableActions.map((label) => normalizeMenuLabel(label));
+  return {
+    ok: normalizedAvailable.some((label) => wanted.includes(label)),
+    result: {
+      availableActions,
+      surface,
     },
-    {
-      timeoutMs,
-      intervalMs,
-      ready: (value) => Boolean(value?.ok),
-    }
-  );
+  };
 }
 
 export function openPlaybackActionMenu(runner, targetId, { preferredLabels = ['替换队列', '立即播放'], waitMs = 200 } = {}) {
@@ -402,7 +381,7 @@ export function openPlaybackActionMenu(runner, targetId, { preferredLabels = ['�
     );
   }
 
-  const waited = waitForPlaybackActions(runner, targetId, preferredLabels, { timeoutMs: Math.max(waitMs * 4, 800) });
+  const waited = waitForPlaybackActions(runner, targetId, preferredLabels);
   if (!waited?.ok) runner.waitMs(waitMs);
   const after = waited?.result?.surface || inspectPlaybackActionSurface(runner, targetId);
   const availableActions = waited?.result?.availableActions || after?.visibleMenuItems || [];
@@ -455,29 +434,18 @@ export function choosePlaybackAction(runner, targetId, labels = ['替换队列',
   }
 
   const waitMs = options.waitMs ?? 200;
-  const postClickWait = typeof runner.waitForCondition === 'function'
-    ? runner.waitForCondition(
-        'playback-action-transition',
-        () => {
-          const surface = inspectPlaybackActionSurface(runner, targetId) || {};
-          const visibleMenuItems = surface?.visibleMenuItems || [];
-          const stillVisible = visibleMenuItems.some((label) => normalizeMenuLabel(label) === normalizeMenuLabel(actualLabel));
-          return {
-            ok: !stillVisible,
-            visibleMenuItems,
-            surface,
-            stillVisible,
-          };
-        },
-        {
-          timeoutMs: Math.max(waitMs * 4, 800),
-          intervalMs: 120,
-          ready: (value) => Boolean(value?.ok),
-        }
-      )
-    : null;
-  if (!postClickWait) runner.waitMs(waitMs);
-  const postClickVisibleMenuItems = postClickWait?.result?.visibleMenuItems || inspectPlaybackActionSurface(runner, targetId)?.visibleMenuItems || [];
+  if (waitMs > 0) runner.waitMs(waitMs);
+  const surface = inspectPlaybackActionSurface(runner, targetId) || {};
+  const visibleMenuItems = surface?.visibleMenuItems || [];
+  const stillVisible = visibleMenuItems.some((label) => normalizeMenuLabel(label) === normalizeMenuLabel(actualLabel));
+  const postClickWait = {
+    ok: !stillVisible,
+    label: 'playback-action-transition',
+    elapsedMs: waitMs,
+    attempts: [{ ok: !stillVisible, visibleMenuItems, surface, stillVisible }],
+    result: { ok: !stillVisible, visibleMenuItems, surface, stillVisible },
+  };
+  const postClickVisibleMenuItems = postClickWait?.result?.visibleMenuItems || [];
   return {
     ok: true,
     requestedLabels: labels,

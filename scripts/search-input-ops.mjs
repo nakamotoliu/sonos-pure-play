@@ -80,55 +80,85 @@ export function focusVisibleSearchInput(runner, targetId, label = '搜索') {
   return focused;
 }
 
+function buildReplaceSearchValueFn(query, requestedLabel = '搜索', { submit = true, triggerTrailingSpace = false } = {}) {
+  return `() => {
+    const requested = ${JSON.stringify(requestedLabel)};
+    const query = ${JSON.stringify(query)};
+    const submit = ${JSON.stringify(Boolean(submit))};
+    const triggerTrailingSpace = ${JSON.stringify(Boolean(triggerTrailingSpace))};
+    const expectedValue = triggerTrailingSpace ? query + ' ' : query;
+    const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+    const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+    const candidates = [
+      ...document.querySelectorAll('input,textarea,[contenteditable="true"]'),
+      ...document.querySelectorAll('[role="combobox"],[role="searchbox"]')
+    ].filter(visible);
+    const target = candidates.find((el) => {
+      const aria = normalize(el.getAttribute('aria-label') || '');
+      const placeholder = normalize(el.getAttribute('placeholder') || '');
+      const role = normalize(el.getAttribute('role') || '');
+      if (requested && (aria === requested || placeholder === requested)) return true;
+      if (role === 'searchbox' || role === 'combobox') return true;
+      if (el.tagName === 'INPUT' && (el.type === 'search' || placeholder.includes('搜索'))) return true;
+      return false;
+    }) || document.querySelector('input[type="search"]');
+    if (!target || !visible(target)) return { ok: false, reason: 'search-input-not-found' };
+    const setValue = (el, value) => {
+      if ('value' in el) {
+        const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(el, value);
+        else el.value = value;
+      } else if (el.isContentEditable) {
+        el.textContent = value;
+      }
+    };
+    const readValue = () => normalize(('value' in target ? target.value : (target.textContent || '')) || '');
+    target.focus?.({ preventScroll: true });
+    target.click?.();
+    target.select?.();
+    setValue(target, expectedValue);
+    target.dispatchEvent(new InputEvent('input', { bubbles: true, data: expectedValue, inputType: 'insertText' }));
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+    if (submit) {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+      target.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', bubbles: true }));
+      target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+      target.form?.requestSubmit?.();
+    }
+    const value = readValue();
+    return {
+      ok: normalize(value) === normalize(expectedValue),
+      tag: target.tagName,
+      role: target.getAttribute('role') || '',
+      aria: target.getAttribute('aria-label') || '',
+      placeholder: target.getAttribute('placeholder') || '',
+      value,
+      expectedValue: normalize(expectedValue),
+    };
+  }`;
+}
+
 export function replaceVisibleSearchValue(
   runner,
   targetId,
   query,
-  { label = '搜索', submit = true, triggerTrailingSpace = false, settleTimeoutMs = 2200, settleIntervalMs = 180 } = {}
+  { label = '搜索', submit = true, triggerTrailingSpace = false } = {}
 ) {
-  const focus = focusVisibleSearchInput(runner, targetId, label);
-  runner.press(targetId, 'Meta+A');
-  runner.waitMs(120);
-  runner.press(targetId, 'Backspace');
-  runner.waitMs(180);
-  runner.type(targetId, query);
-  runner.waitMs(180);
-  if (triggerTrailingSpace) {
-    runner.type(targetId, ' ');
-    runner.waitMs(220);
-  }
-  if (submit) runner.press(targetId, 'Enter');
   const expectedValue = triggerTrailingSpace ? `${query} ` : query;
-  const settled = typeof runner.waitForCondition === 'function'
-    ? runner.waitForCondition(
-        'search-input-value-retained',
-        () => {
-          const after = readVisibleSearchInput(runner, targetId, label);
-          const retained = normalizeWhitespace(after?.value || '') === normalizeWhitespace(expectedValue);
-          return {
-            ok: retained,
-            after,
-            retained,
-          };
-        },
-        {
-          timeoutMs: settleTimeoutMs,
-          intervalMs: settleIntervalMs,
-          ready: (value) => Boolean(value?.retained),
-        }
-      )
-    : null;
-  const after = settled?.result?.after || readVisibleSearchInput(runner, targetId, label);
-  const retained = settled?.result?.retained ?? (normalizeWhitespace(after?.value || '') === normalizeWhitespace(expectedValue));
+  const result = runner.evaluate(targetId, buildReplaceSearchValueFn(query, label, { submit, triggerTrailingSpace }));
+  const after = result?.result || result || { ok: false, reason: 'search-input-write-failed' };
+  const retained = Boolean(after?.ok && normalizeWhitespace(after?.value || '') === normalizeWhitespace(expectedValue));
   return {
     ok: retained,
-    focus,
+    focus: after?.ok ? { ok: true, tag: after.tag, role: after.role, aria: after.aria, placeholder: after.placeholder } : { ok: false, reason: after?.reason || 'search-input-not-found' },
     after,
     retained,
     query: normalizeWhitespace(query),
     triggerTrailingSpace,
     expectedValue,
-    settled,
+    settled: null,
   };
 }
 
@@ -181,7 +211,7 @@ export function checkSearchQueryApplied(runner, targetId, query) {
 export function ensureQueryGate(runner, targetId, query, options = {}) {
   const {
     label = '搜索',
-    triggerTrailingSpace = true,
+    triggerTrailingSpace = false,
     submit = true,
     inputAttempts = 2,
     pageReloads = 1,
@@ -199,24 +229,23 @@ export function ensureQueryGate(runner, targetId, query, options = {}) {
     }
 
     for (let inputIndex = 0; inputIndex < inputAttempts; inputIndex += 1) {
+      const before = checkSearchQueryApplied(runner, targetId, query);
+      if (before?.ok) {
+        const attempt = { reloadIndex, inputIndex, write: { ok: true, skippedWrite: true }, gate: before };
+        attempts.push(attempt);
+        return {
+          ok: true,
+          query: normalizeWhitespace(query),
+          attempt,
+          attempts,
+        };
+      }
       const write = replaceVisibleSearchValue(runner, targetId, query, {
         label,
         submit,
         triggerTrailingSpace,
       });
-      const settledGate = typeof runner.waitForCondition === 'function'
-        ? runner.waitForCondition(
-            'search-query-gate',
-            () => checkSearchQueryApplied(runner, targetId, query),
-            {
-              timeoutMs: settleMs,
-              intervalMs: 180,
-              ready: (value) => Boolean(value?.ok),
-            }
-          )
-        : null;
-      if (!settledGate) runner.waitMs(settleMs);
-      const gate = settledGate?.result || checkSearchQueryApplied(runner, targetId, query);
+      const gate = checkSearchQueryApplied(runner, targetId, query);
       const attempt = { reloadIndex, inputIndex, write, gate };
       attempts.push(attempt);
       if (gate.ok) {
