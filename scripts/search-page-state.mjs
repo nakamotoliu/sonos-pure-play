@@ -153,10 +153,16 @@ function detectSearchPageStateInDom(options = {}) {
     serviceSections: serviceSectionCount > 0 || serviceLabels.length > 0,
   };
 
+  const strongResultStructure = Boolean(
+    structuralSignals.multipleResultCards ||
+    structuralSignals.viewAllControls ||
+    structuralSignals.typeLabels ||
+    structuralSignals.serviceSections
+  );
   const realtimeResultStructure = Boolean(
     structuralSignals.multipleResultCards ||
     (structuralSignals.viewAllControls && (structuralSignals.playableButtons || structuralSignals.typeLabels || structuralSignals.serviceSections || structuralSignals.queryVisibleSomewhere)) ||
-    (structuralSignals.playableButtons && (structuralSignals.typeLabels || structuralSignals.queryVisibleSomewhere || structuralSignals.multipleResultCards)) ||
+    (structuralSignals.playableButtons && (structuralSignals.typeLabels || structuralSignals.multipleResultCards)) ||
     (structuralSignals.typeLabels && (structuralSignals.multipleResultCards || structuralSignals.queryVisibleSomewhere || structuralSignals.serviceSections)) ||
     (structuralSignals.serviceSections && (structuralSignals.multipleResultCards || structuralSignals.viewAllControls || structuralSignals.playableButtons || structuralSignals.typeLabels))
   );
@@ -167,7 +173,7 @@ function detectSearchPageStateInDom(options = {}) {
   const resultsPresentChecks = [
     { ok: visibleQueryInInput && structuralSignals.multipleResultCards, reason: 'query-visible-plus-multiple-result-cards' },
     { ok: visibleQueryInInput && structuralSignals.viewAllControls, reason: 'query-visible-plus-view-all-controls' },
-    { ok: visibleQueryInInput && structuralSignals.playableButtons, reason: 'query-visible-plus-playable-buttons' },
+    { ok: visibleQueryInInput && structuralSignals.playableButtons && strongResultStructure, reason: 'query-visible-plus-playable-buttons' },
     { ok: structuralSignals.multipleResultCards && structuralSignals.typeLabels, reason: 'multiple-result-cards-plus-type-labels' },
     { ok: structuralSignals.multipleResultCards && structuralSignals.playableButtons, reason: 'multiple-result-cards-plus-playable-buttons' },
     { ok: structuralSignals.viewAllControls && structuralSignals.typeLabels, reason: 'view-all-controls-plus-type-labels' },

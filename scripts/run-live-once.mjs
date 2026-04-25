@@ -186,7 +186,7 @@ function clickCandidateAndReadDetail(runner, targetId, chosen, { timeoutMs = 900
           },
         };
         if (state.appError || state.loginBlocked || state.challengeRequired) break;
-        if (location.href.includes('/browse/services/') || state.layers.detail.length > 0) break;
+        if (state.layers.detail.length > 0) break;
         await sleep(intervalMs);
       }
       return {
@@ -200,6 +200,45 @@ function clickCandidateAndReadDetail(runner, targetId, chosen, { timeoutMs = 900
   const clicked = result?.result || result;
   if (!clicked?.ok) throw new Error(`candidate click failed: ${playLabel}`);
   return clicked;
+}
+
+function waitForPlaybackSurfaceReady(runner, targetId, { timeoutMs = 10000, intervalMs = 180 } = {}) {
+  const result = runner.evaluate(
+    targetId,
+    `async () => {
+      const timeoutMs = ${Number(timeoutMs)};
+      const intervalMs = ${Number(intervalMs)};
+      const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+      const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+      const textOf = (el) => normalize(el?.getAttribute?.('aria-label') || el?.textContent || '');
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const startedAt = Date.now();
+      let state = null;
+      while (Date.now() - startedAt <= timeoutMs) {
+        const main = document.querySelector('main') || document.body;
+        const buttons = [...document.querySelectorAll('main button, main [role="button"], main [role="menuitem"]')]
+          .filter(visible)
+          .map((el) => textOf(el))
+          .filter(Boolean);
+        const headings = [...document.querySelectorAll('main h1, main h2, main [role="heading"]')]
+          .filter(visible)
+          .map((el) => textOf(el))
+          .filter(Boolean);
+        const text = normalize(main?.innerText || document.body?.innerText || '');
+        state = {
+          ok: buttons.includes('更多选项') || buttons.some((label) => /^随机播放/.test(label)),
+          url: location.href,
+          headings: headings.slice(0, 12),
+          buttons: buttons.slice(0, 60),
+          bodyPreview: text.slice(0, 240),
+        };
+        if (state.ok) break;
+        await sleep(intervalMs);
+      }
+      return state;
+    }`
+  );
+  return result?.result || result || { ok: false };
 }
 
 function captureSuccessScreenshot(runner, targetId) {
@@ -400,6 +439,14 @@ try {
             }),
           });
 
+          const playbackSurfaceReady = runner.runStep('playback-surface-ready', {
+            targetId,
+            context: { query, title: chosenCandidate?.title || null },
+            action: () => waitForPlaybackSurfaceReady(runner, targetId),
+            verify: (result) => ({ ok: Boolean(result?.ok), result }),
+          }).actionResult;
+          emit({ phase: 'playback-surface-ready', query, playbackSurfaceReady, chosenCandidate });
+
           const playbackAction = runner.choosePlaybackActionVerified(targetId, actionNames, { waitMs: PLAYBACK_ACTION_WAIT_MS }).actionResult;
           emit({ phase: 'playback-action', query, playbackAction, chosenCandidate });
 
@@ -458,6 +505,9 @@ try {
     throw lastError || new Error('Playback run failed without final result');
   }
 
+  const closeResidentResult = runner.closeResident?.() || null;
+  appendRunRecord({ kind: 'browser-runner-closed', closeResidentResult });
+
   const successPayload = {
     ok: true,
     report: {
@@ -499,5 +549,9 @@ try {
   }
   console.log(JSON.stringify(successPayload));
 } catch (error) {
+  try {
+    const closeResidentResult = runner.closeResident?.() || null;
+    appendRunRecord({ kind: 'browser-runner-closed-after-error', closeResidentResult });
+  } catch {}
   fail('run-live-once', error, { room: roomInput, request });
 }

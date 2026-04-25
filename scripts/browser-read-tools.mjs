@@ -3,15 +3,29 @@ import { buildReadLayeredPageStateFn } from './dom-layers.mjs';
 import { classifyRoomActiveState } from './room-active-detector.mjs';
 
 export function evaluate(runner, targetId, fnSource) {
+  const resident = runner.actBrowser?.({ kind: 'evaluate', targetId, fn: fnSource }, { timeoutMs: runner.browserCommandTimeoutMs || 90000 });
+  if (resident) return resident;
   return runner.oc(['evaluate', '--target-id', targetId, '--fn', fnSource]);
 }
 
 export function snapshot(runner, targetId, limit = 260) {
+  const resident = runner.requestBrowser?.({
+    method: 'GET',
+    path: '/snapshot',
+    query: { format: 'aria', targetId, limit },
+  }, { timeoutMs: 20000 });
+  if (resident) return resident;
   const shot = runner.oc(['snapshot', '--target-id', targetId, '--format', 'aria', '--limit', String(limit)]);
   return shot;
 }
 
 export function snapshotAi(runner, targetId, limit = 260) {
+  const resident = runner.requestBrowser?.({
+    method: 'GET',
+    path: '/snapshot',
+    query: { format: 'ai', targetId, limit },
+  }, { timeoutMs: 20000 });
+  if (resident) return resident;
   return runner.oc(['snapshot', '--target-id', targetId, '--limit', String(limit)]);
 }
 

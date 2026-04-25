@@ -2,26 +2,38 @@ import { SkillError } from './normalize.mjs';
 import { SEARCH_URL, SONOS_HOST } from './selectors.mjs';
 
 export function tabs(runner) {
+  const resident = runner.requestBrowser?.({ method: 'GET', path: '/tabs' });
+  if (resident) return resident.tabs || [];
   return runner.oc(['tabs']).tabs || [];
 }
 
 export function focus(runner, targetId) {
+  const resident = runner.requestBrowser?.({ method: 'POST', path: '/tabs/focus', body: { targetId } }, { timeoutMs: 20000 });
+  if (resident) return resident;
   runner.oc(['focus', targetId], { parseJson: false });
 }
 
 export function close(runner, targetId) {
+  const resident = runner.requestBrowser?.({ method: 'DELETE', path: `/tabs/${encodeURIComponent(targetId)}` }, { timeoutMs: 20000 });
+  if (resident) return resident;
   runner.oc(['close', targetId], { parseJson: false });
 }
 
 export function waitMs(runner, ms) {
+  const resident = runner.actBrowser?.({ kind: 'wait', timeMs: Number(ms) || 0 }, { timeoutMs: Math.max(Number(ms) || 0, 1000) + 5000 });
+  if (resident) return resident;
   runner.oc(['wait', '--time', String(ms)], { parseJson: false });
 }
 
 export function waitForLoad(runner, targetId) {
+  const resident = runner.actBrowser?.({ kind: 'wait', targetId, loadState: 'domcontentloaded', timeoutMs: 30000 }, { timeoutMs: 35000 });
+  if (resident) return resident;
   runner.oc(['wait', '--target-id', targetId, '--load', 'domcontentloaded', '--timeout-ms', '30000'], { parseJson: false });
 }
 
 export function navigate(runner, targetId, url) {
+  const resident = runner.requestBrowser?.({ method: 'POST', path: '/navigate', body: { url, targetId } }, { timeoutMs: 20000 });
+  if (resident) return resident;
   runner.oc(['navigate', url, '--target-id', targetId], { parseJson: false });
 }
 

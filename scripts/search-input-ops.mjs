@@ -178,14 +178,15 @@ export function ensureSearchValue(runner, targetId, query, options = {}) {
   return attempt;
 }
 
-export function assessQueryGateState(state = {}, query = '') {
+export function assessQueryGateState(state = {}, query = '', { requireFreshResults = false } = {}) {
   const normalizedQuery = normalizeText(query);
   const normalizedValue = normalizeText(state?.searchValue || '');
   const queryApplied = Boolean(
     normalizedQuery &&
     (state?.queryApplied || normalizedValue === normalizedQuery)
   );
-  const ok = Boolean(state?.searchPageReady && queryApplied);
+  const freshResults = Boolean(state?.resultsFreshForExpectedQuery);
+  const ok = Boolean(state?.searchPageReady && queryApplied && (!requireFreshResults || freshResults));
   return {
     ok,
     searchPageReady: Boolean(state?.searchPageReady),
@@ -193,17 +194,18 @@ export function assessQueryGateState(state = {}, query = '') {
     pageKind: state?.pageKind || 'UNKNOWN',
     searchValue: normalizeWhitespace(state?.searchValue || ''),
     historyVisible: Boolean(state?.historyVisible),
+    resultsFreshForExpectedQuery: freshResults,
     visibleSearchBoxCount: Number(state?.visibleSearchBoxCount || 0),
     activeElementRole: state?.activeElementRole || '',
     activeElementTag: state?.activeElementTag || '',
   };
 }
 
-export function checkSearchQueryApplied(runner, targetId, query) {
+export function checkSearchQueryApplied(runner, targetId, query, options = {}) {
   const result = runner.evaluate(targetId, buildDetectSearchPageStateFn({ expectedQuery: query }));
   const state = result?.result || result || {};
   return {
-    ...assessQueryGateState(state, query),
+    ...assessQueryGateState(state, query, options),
     state,
   };
 }
@@ -217,6 +219,8 @@ export function ensureQueryGate(runner, targetId, query, options = {}) {
     pageReloads = 1,
     settleMs = 450,
     reloadSettleMs = 1200,
+    freshTimeoutMs = 8000,
+    freshIntervalMs = 180,
   } = options;
 
   const attempts = [];
@@ -229,7 +233,7 @@ export function ensureQueryGate(runner, targetId, query, options = {}) {
     }
 
     for (let inputIndex = 0; inputIndex < inputAttempts; inputIndex += 1) {
-      const before = checkSearchQueryApplied(runner, targetId, query);
+      const before = checkSearchQueryApplied(runner, targetId, query, { requireFreshResults: true });
       if (before?.ok) {
         const attempt = { reloadIndex, inputIndex, write: { ok: true, skippedWrite: true }, gate: before };
         attempts.push(attempt);
@@ -245,7 +249,12 @@ export function ensureQueryGate(runner, targetId, query, options = {}) {
         submit,
         triggerTrailingSpace,
       });
-      const gate = checkSearchQueryApplied(runner, targetId, query);
+      let gate = checkSearchQueryApplied(runner, targetId, query, { requireFreshResults: true });
+      const freshStartedAt = Date.now();
+      while (!gate.ok && gate.searchPageReady && gate.queryApplied && Date.now() - freshStartedAt <= freshTimeoutMs) {
+        runner.waitMs(freshIntervalMs);
+        gate = checkSearchQueryApplied(runner, targetId, query, { requireFreshResults: true });
+      }
       const attempt = { reloadIndex, inputIndex, write, gate };
       attempts.push(attempt);
       if (gate.ok) {
@@ -274,6 +283,8 @@ export function ensureQueryGate(runner, targetId, query, options = {}) {
         pageReloads,
         settleMs,
         reloadSettleMs,
+        freshTimeoutMs,
+        freshIntervalMs,
       },
     }
   );

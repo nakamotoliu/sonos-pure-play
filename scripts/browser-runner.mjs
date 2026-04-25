@@ -7,7 +7,7 @@
  * API surface is kept compatible for the remaining browser tool consumers.
  */
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -63,8 +63,10 @@ const DEFAULT_OPENCLAW_CONFIG_PATH = path.join(os.homedir(), '.openclaw', 'openc
 const DEFAULT_SONOS_BROWSER_PROFILE = 'openclaw';
 const LOGIN_RECOVERY_SENTINEL = '__SONOS_LOGIN_RECOVERY_ACTIVE__';
 const LOCAL_LOGIN_HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'login-recovery.local.mjs');
-const DEFAULT_FAILURE_ARTIFACT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'logs', 'failure-artifacts.local');
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_FAILURE_ARTIFACT_ROOT = path.join(SCRIPT_DIR, '..', 'logs', 'failure-artifacts.local');
 const DEFAULT_BROWSER_COMMAND_TIMEOUT_MS = Number(process.env.SONOS_BROWSER_COMMAND_TIMEOUT_MS || 90000);
+const DEFAULT_BROWSER_RUNNER_MODE = process.env.SONOS_BROWSER_RUNNER_MODE || 'resident';
 
 function sanitizeArtifactSegment(value) {
   return String(value || '')
@@ -311,6 +313,10 @@ export class PurePlayBrowserRunner {
     this.currentTargetId = null;
     this.currentStepContext = null;
     this.targetUrlHints = new Map();
+    this.runnerMode = DEFAULT_BROWSER_RUNNER_MODE;
+    this.residentDisabled = this.runnerMode === 'cli';
+    this.residentWorker = null;
+    this.residentIpcDir = null;
   }
 
   log(event) {
@@ -522,6 +528,77 @@ export class PurePlayBrowserRunner {
    * Important: `this.profile` is a browser runtime profile and must be passed
    * via `--browser-profile`. Do not replace this with CLI root `--profile`.
    */
+  ensureResidentWorker() {
+    if (this.residentDisabled || this.runnerMode !== 'resident') return false;
+    if (this.residentWorker?.pid && this.residentWorker.exitCode === null) return true;
+    this.residentIpcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sonos-browser-runner-'));
+    const workerPath = path.join(SCRIPT_DIR, 'gateway-browser-worker.mjs');
+    this.residentWorker = spawn(process.execPath, [workerPath, this.residentIpcDir, this.profile, String(this.browserCommandTimeoutMs)], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: process.env,
+    });
+    this.residentWorker.stderr?.on?.('data', (chunk) => {
+      this.log({ event: 'resident-worker-stderr', message: String(chunk || '').slice(0, 500) });
+    });
+    this.log({ event: 'resident-worker-started', pid: this.residentWorker.pid, ipcDir: this.residentIpcDir });
+    return true;
+  }
+
+  residentRequestSync(params, { timeoutMs = this.browserCommandTimeoutMs } = {}) {
+    if (!this.ensureResidentWorker()) return null;
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const requestPath = path.join(this.residentIpcDir, `req-${id}.json`);
+    const responsePath = path.join(this.residentIpcDir, `res-${id}.json`);
+    fs.writeFileSync(requestPath, JSON.stringify({ id, params: { ...params, timeoutMs } }));
+    const startedAt = Date.now();
+    while (Date.now() - startedAt <= timeoutMs + 5000) {
+      if (fs.existsSync(responsePath)) {
+        const payload = JSON.parse(fs.readFileSync(responsePath, 'utf8'));
+        try { fs.unlinkSync(responsePath); } catch {}
+        if (payload?.ok) return payload.result;
+        const error = new Error(payload?.error?.message || 'resident browser request failed');
+        error.code = payload?.error?.code || null;
+        throw error;
+      }
+      sleepMs(10);
+    }
+    throw new Error(`resident browser request timed out after ${timeoutMs}ms: ${params?.method || ''} ${params?.path || ''}`);
+  }
+
+  requestBrowser(params, { timeoutMs = this.browserCommandTimeoutMs } = {}) {
+    if (this.residentDisabled || this.runnerMode !== 'resident') return null;
+    try {
+      return this.residentRequestSync(params, { timeoutMs });
+    } catch (error) {
+      this.residentDisabled = true;
+      this.log({
+        event: 'resident-browser-fallback-to-cli',
+        message: String(error?.message || error).slice(0, 500),
+      });
+      return null;
+    }
+  }
+
+  actBrowser(body, { timeoutMs = this.browserCommandTimeoutMs } = {}) {
+    return this.requestBrowser({ method: 'POST', path: '/act', body }, { timeoutMs });
+  }
+
+  closeResident() {
+    if (!this.residentWorker?.pid) return { ok: true, skipped: true };
+    const pid = this.residentWorker.pid;
+    try {
+      if (this.residentIpcDir && this.residentWorker.exitCode === null) {
+        const id = `stop-${Date.now()}`;
+        fs.writeFileSync(path.join(this.residentIpcDir, `req-${id}.json`), JSON.stringify({ id, kind: 'stop' }));
+        sleepMs(80);
+      }
+      if (this.residentWorker.exitCode === null) this.residentWorker.kill('SIGTERM');
+      return { ok: true, pid };
+    } catch (error) {
+      return { ok: false, pid, error: String(error?.message || error) };
+    }
+  }
+
   oc(args, { parseJson = true } = {}) {
     const base = ['browser', '--browser-profile', this.profile, ...(parseJson ? ['--json'] : []), ...args];
     const maxAttempts = 2;
@@ -857,6 +934,17 @@ export class PurePlayBrowserRunner {
     return evaluated?.result || evaluated;
   }
 
+  waitForSearchPageReady(targetId, query = '', { timeoutMs = 8000, intervalMs = 180 } = {}) {
+    const startedAt = Date.now();
+    let lastState = null;
+    while (Date.now() - startedAt <= timeoutMs) {
+      lastState = this.readSearchPageState(targetId, query);
+      if (lastState?.onSearchPage && lastState?.searchPageReady) return lastState;
+      this.waitMs(intervalMs);
+    }
+    return lastState;
+  }
+
   readVisibleMenuItems(targetId) {
     return readVisibleMenuItemsTool(this, targetId);
   }
@@ -930,7 +1018,7 @@ export class PurePlayBrowserRunner {
         this.navigate(targetId, searchUrl);
         this.waitForLoad(targetId);
         this.waitMs(settleMs);
-        const state = this.readSearchPageState(targetId, query);
+        const state = this.waitForSearchPageReady(targetId, query, { timeoutMs: 8000, intervalMs: 180 });
         this.rememberTargetUrl(targetId, searchUrl);
         return { url: searchUrl, state };
       },
