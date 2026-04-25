@@ -271,6 +271,17 @@ const logger = (event) => {
 const runner = new PurePlayBrowserRunner({ logger, profile: process.env.OPENCLAW_BROWSER_PROFILE || 'openclaw' });
 
 let finalizedBySignal = false;
+function closeRunnerForExit(kind) {
+  try {
+    const closeResidentResult = runner.closeResident?.() || null;
+    appendRunRecord({ kind, closeResidentResult });
+    return closeResidentResult;
+  } catch (error) {
+    appendRunRecord({ kind: `${kind}-failed`, message: String(error?.message || error) });
+    return null;
+  }
+}
+
 function recordSignalFailure(signal) {
   if (finalizedBySignal) return;
   finalizedBySignal = true;
@@ -291,6 +302,7 @@ function recordSignalFailure(signal) {
       message: String(error?.message || error),
     };
   }
+  const closeResidentResult = closeRunnerForExit('browser-runner-closed-after-signal');
   appendRunRecord({
     kind: 'run-signaled',
     signal,
@@ -298,6 +310,7 @@ function recordSignalFailure(signal) {
     targetId: runner.currentTargetId || null,
     context: runner.currentStepContext || null,
     evidence,
+    closeResidentResult,
   });
 }
 
@@ -505,8 +518,7 @@ try {
     throw lastError || new Error('Playback run failed without final result');
   }
 
-  const closeResidentResult = runner.closeResident?.() || null;
-  appendRunRecord({ kind: 'browser-runner-closed', closeResidentResult });
+  const closeResidentResult = closeRunnerForExit('browser-runner-closed');
 
   const successPayload = {
     ok: true,
@@ -549,9 +561,6 @@ try {
   }
   console.log(JSON.stringify(successPayload));
 } catch (error) {
-  try {
-    const closeResidentResult = runner.closeResident?.() || null;
-    appendRunRecord({ kind: 'browser-runner-closed-after-error', closeResidentResult });
-  } catch {}
+  closeRunnerForExit('browser-runner-closed-after-error');
   fail('run-live-once', error, { room: roomInput, request });
 }

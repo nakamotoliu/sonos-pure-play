@@ -540,6 +540,9 @@ export class PurePlayBrowserRunner {
     this.residentWorker.stderr?.on?.('data', (chunk) => {
       this.log({ event: 'resident-worker-stderr', message: String(chunk || '').slice(0, 500) });
     });
+    this.residentWorker.on?.('exit', (code, signal) => {
+      this.log({ event: 'resident-worker-exited', pid: this.residentWorker?.pid || null, code, signal });
+    });
     this.log({ event: 'resident-worker-started', pid: this.residentWorker.pid, ipcDir: this.residentIpcDir });
     return true;
   }
@@ -552,6 +555,9 @@ export class PurePlayBrowserRunner {
     fs.writeFileSync(requestPath, JSON.stringify({ id, params: { ...params, timeoutMs } }));
     const startedAt = Date.now();
     while (Date.now() - startedAt <= timeoutMs + 5000) {
+      if (this.residentWorker?.exitCode !== null && !fs.existsSync(responsePath)) {
+        throw new Error(`resident browser worker exited before responding: code=${this.residentWorker?.exitCode} signal=${this.residentWorker?.signalCode || ''}`);
+      }
       if (fs.existsSync(responsePath)) {
         const payload = JSON.parse(fs.readFileSync(responsePath, 'utf8'));
         try { fs.unlinkSync(responsePath); } catch {}
@@ -593,6 +599,11 @@ export class PurePlayBrowserRunner {
         sleepMs(80);
       }
       if (this.residentWorker.exitCode === null) this.residentWorker.kill('SIGTERM');
+      if (this.residentIpcDir) {
+        try { fs.rmSync(this.residentIpcDir, { recursive: true, force: true }); } catch {}
+      }
+      this.residentWorker = null;
+      this.residentIpcDir = null;
       return { ok: true, pid };
     } catch (error) {
       return { ok: false, pid, error: String(error?.message || error) };
