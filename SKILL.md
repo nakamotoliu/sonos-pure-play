@@ -10,19 +10,19 @@ description: |-
 - Use an OpenClaw browser session that matches the runtime mode:
   - headed mode: a visible foreground browser session is allowed and may be focused during execution
   - headless mode: a hidden browser session is also supported; Sonos Web must already be logged in in that browser profile
-- Default browser runtime profile is `openclaw` unless explicitly overridden for the chosen browser session.
+- Default browser runtime profile for this skill is `openclaw-headless` unless explicitly overridden for the chosen browser session.
 - The recommended first-time operator setup is:
-  - use `browser.profiles.openclaw` in `~/.openclaw/openclaw.json`
-  - keep that profile usable for this skill's browser flow
-  - choose headed or headless based on operator preference; headless is a recommended setup choice for background runs, not a hard requirement
-  - verify that same browser profile already has a usable Sonos Web session before relying on this skill
+  - create `browser.profiles.openclaw-headless` in `~/.openclaw/openclaw.json`
+  - set `browser.profiles.openclaw-headless.headless=true`
+  - keep the normal `openclaw` profile headed/neutral; do not set global `browser.headless` just for Sonos
+  - log into Sonos Web once in the `openclaw-headless` profile before relying on this skill
 - Distinguish the two profile concepts strictly:
   - CLI root `--profile <name>` switches the OpenClaw instance/state directory to `~/.openclaw-<name>`.
   - Browser CLI `--browser-profile <name>` selects the browser runtime profile.
   - Browser tool / browser.request field `profile` also means browser runtime profile, not CLI root profile.
 - `OPENCLAW_BROWSER_PROFILE` only selects the browser runtime profile for `openclaw browser ...` actions. It does **not** switch the OpenClaw CLI global state directory.
 - If CLI root `--profile` is omitted, commands use the current OpenClaw instance, usually `~/.openclaw`.
-- If browser profile is omitted, browser uses the configured default browser profile, usually `openclaw`.
+- If browser profile is omitted in Sonos scripts, the skill defaults to `openclaw-headless`; the broader OpenClaw browser default may still be `openclaw`.
 - The bundled browser plugin must be enabled and loadable (`plugins.allow` includes `browser`, `plugins.entries.browser.enabled=true`, `browser.enabled=true`).
 - **First-time setup**: Log into Sonos Web (play.sonos.com) once in the browser profile used by this skill.
 - Browser operations should go through the official OpenClaw browser runtime / CLI, not a custom CDP bridge.
@@ -31,11 +31,11 @@ description: |-
 ## Preflight gate
 - Before starting any playback workflow, the agent should treat browser-profile readiness as a hard gate.
 - The agent should confirm:
-  - the selected browser runtime profile exists, recommended default: `openclaw`
+  - the selected browser runtime profile exists, recommended default: `openclaw-headless`
   - the profile is the one intended by `OPENCLAW_BROWSER_PROFILE` or the active runner configuration
   - Sonos Web is already logged in and usable in that profile
-- Treat the default `openclaw` browser profile as valid when the OpenClaw runtime exposes it, even if `browser.profiles.openclaw` is not explicitly written in `openclaw.json`.
-- For non-default custom profiles, require an explicit config entry.
+- Require an explicit config entry for the recommended `openclaw-headless` profile or any other custom Sonos profile.
+- Treat `openclaw` as a normal/debug profile, not the Sonos default.
 - If the selected profile itself is missing, browser runtime is not usable, or Sonos Web is logged out in that profile, do not continue into search, candidate selection, or playback actions.
 - Stop early and direct the operator to:
   - [README.md](./README.md)
@@ -49,7 +49,7 @@ description: |-
 - Wrong example: `openclaw browser tabs --profile openclaw`
   - This is wrong because it switches the OpenClaw state directory to `~/.openclaw-openclaw`.
 - Correct examples:
-  - `openclaw browser --browser-profile openclaw tabs`
+  - `openclaw browser --browser-profile openclaw-headless tabs`
   - `openclaw browser --browser-profile user tabs`
 - If browser troubleshooting shows `gateway token missing` and the path points at `~/.openclaw-xxx`, check for accidental CLI root `--profile` misuse first.
 
@@ -84,7 +84,7 @@ description: |-
 The skill, not code, defines the business flow. Follow these steps in order and do not invent a different flow:
 
 0. Run the preflight gate:
-   - confirm the selected browser runtime profile exists, recommended default: `openclaw`
+   - confirm the selected browser runtime profile exists, recommended default: `openclaw-headless`
    - confirm the chosen profile is the same profile the browser runner will use
    - confirm Sonos Web is already logged in and usable in that profile
    - if not ready, stop and direct the operator to `README.md` and `SETUP.md`
@@ -144,6 +144,12 @@ The skill, not code, defines the business flow. Follow these steps in order and 
    - playback state changed to `PLAYING` when expected
    - queue/title/track changed in a way consistent with the request
    - if verification indicates a retryable playback failure such as copyright/transition/no content match, select a different result and retry
+   - copyright-unavailable is a hard retry signal, not a final failure by itself:
+     - examples include CLI status/queue text like `应版权方要求暂不能播放`, `暂不能播放`, `无法播放`, or obvious unavailable/copyright messages
+     - when this appears after a candidate was selected, mark that candidate as rejected for this run
+     - return to the search results and try the next candidate under the same query before changing the query
+     - do not alert or write wiki until all allowed candidate/query attempts have failed and the final CLI truth is still not playing
+   - if one candidate is copyright-blocked but a later candidate starts `PLAYING` and queue/title context matches the request, the run is successful; stop further retry immediately
    - total playback attempts per query are capped at 3
    - if verification failure is retryable, continue trying different candidates until the retry limit is reached
    - if the failure is non-retryable, stop and send the final report immediately
@@ -219,6 +225,21 @@ The skill, not code, defines the business flow. Follow these steps in order and 
 - Do not add user-specific wakeup planners, personal rotation scripts, or private preference generators to this skill surface.
 - Keep local-only automations and private operator routines outside the maintained skill directory, or exclude them explicitly before commit/push.
 
+## Real validation gate
+- After meaningful playback-flow changes, do not treat unit tests as final validation.
+- Run a real supervised browser test against Sonos Web before claiming the change is validated.
+- Preferred command:
+  - `node skills/sonos-pure-play/scripts/test-live-playback.mjs <room> "<request>" ["<request2>" ...]`
+- Example:
+  - `node skills/sonos-pure-play/scripts/test-live-playback.mjs 客厅 "王菲热歌" "周杰伦热歌"`
+- This is the acceptance path because it requires:
+  - real Sonos Web page interaction
+  - real room sync
+  - real playback action execution
+  - final CLI playback verification
+- The script should be used as the default post-change smoke test for this skill.
+- If the real test was not run, say so explicitly; do not present unit-test results as final acceptance.
+
 ## Skill layout
 - `scripts/browser-open-tools.mjs` = browser page-opening/focus tools
 - `scripts/browser-read-tools.mjs` = browser page-reading tools
@@ -234,5 +255,6 @@ The skill, not code, defines the business flow. Follow these steps in order and 
 - `scripts/normalize.mjs` = shared normalization helpers
 - `scripts/verify.mjs` = final playback verification
 - `scripts/failure-notify.mjs` = local failure screenshot/report notification helper driven by `data/failure-notify.local.json`
+- `scripts/test-live-playback.mjs` = real supervised acceptance/smoke test for post-change validation
 - `references/ui-states.md` = web state model
 - `references/phase-1-status.md` = current public status

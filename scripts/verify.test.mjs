@@ -31,6 +31,45 @@ test('marks not-playing verification failure as retryable', () => {
   );
 });
 
+test('marks copyright-unavailable not-playing verification failure as retryable', () => {
+  assert.throws(
+    () => verifyMediaPlayback({
+      room: '客厅 play5',
+      actionName: '替换队列',
+      postStatus: { group: '客厅 play5', state: 'PAUSED', title: 'old', track: 'old' },
+      followupStatus: {
+        group: '客厅 play5',
+        state: 'STOPPED',
+        title: '玫瑰（翻自 贰佰）',
+        artist: '一色Ese 应版权方要求暂不能播放，QQ音乐正在争取中',
+        album: '民谣周末',
+        track: '1',
+      },
+      followupQueueJson: {
+        items: [
+          {
+            position: 1,
+            item: {
+              title: '玫瑰（翻自 贰佰）',
+              artist: '一色Ese 应版权方要求暂不能播放，QQ音乐正在争取中',
+              album: '民谣周末',
+            },
+          },
+        ],
+      },
+      selectedContent: '民谣周末',
+      originalIntent: '周末慵懒民谣',
+    }),
+    (error) => {
+      assert.equal(error.code, 'CLI_VERIFY_FAILED');
+      assert.equal(isRetryablePlaybackVerificationFailure(error), true);
+      assert.equal(error.data.retryReason, 'copyright-unavailable');
+      assert.equal(error.data.unavailableEvidence.unavailableQueueItems[0].title, '玫瑰（翻自 贰佰）');
+      return true;
+    }
+  );
+});
+
 test('marks playing-without-content-match verification failure as retryable', () => {
   assert.throws(
     () => verifyMediaPlayback({

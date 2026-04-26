@@ -8,24 +8,96 @@ export function evaluate(runner, targetId, fnSource) {
   return runner.oc(['evaluate', '--target-id', targetId, '--fn', fnSource]);
 }
 
+function buildDomSnapshotFallbackFn(limit = 260) {
+  const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(1000, Number(limit))) : 260;
+  return `() => {
+    const limit = ${safeLimit};
+    const result = [];
+    const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+    const roleOf = (el) => el.getAttribute('role') || el.tagName?.toLowerCase() || '';
+    const safeUrl = () => {
+      try {
+        const url = new URL(location.href);
+        return url.origin + url.pathname;
+      } catch {
+        return '';
+      }
+    };
+    const safeTitle = () => (/sonos/i.test(document.title || '') ? 'Sonos' : '');
+    const normalize = (value) => String(value || '').trim().replace(/\\s+/g, ' ');
+    const safeLabel = (value) => {
+      const text = normalize(value).slice(0, 80);
+      if (!text) return '';
+      if (/^(搜索|Search|全部|All|QQ音乐|网易云音乐|Sonos Radio)$/.test(text)) return text;
+      if (/^(更多选项|替换当前歌单|替换播放列表|替换队列|立即播放|添加到队列末尾)$/.test(text)) return text;
+      if (/^(查看全部|查看所有|查看更多|展开|关闭|返回|前进|首页|清除|Settings|Close)$/.test(text)) return text;
+      if (/^(播放列表|歌单|专辑|艺术家|艺人|歌手|歌曲|单曲|playlist|album|artist|track|song)$/i.test(text)) return text;
+      if (/^播放\\s*$/i.test(text)) return text;
+      return '';
+    };
+    const nodeKindLabel = (el) => {
+      const text = normalize(el?.textContent || '');
+      if (/^(播放列表|歌单|专辑|艺术家|艺人|歌手|歌曲|单曲|playlist|album|artist|track|song)$/i.test(text)) return text;
+      if (/^(播放列表|歌单|专辑|艺术家|艺人|歌手|歌曲|单曲|playlist|album|artist|track|song)$/i.test(normalize(el?.parentElement?.textContent || ''))) return 'REDACTED_ITEM_LABEL';
+      return '';
+    };
+    const nameOf = (el) => {
+      const aria = safeLabel(el.getAttribute('aria-label'));
+      if (aria) return aria;
+      const title = safeLabel(el.getAttribute('title'));
+      if (title) return title;
+      const placeholder = safeLabel(el.getAttribute('placeholder'));
+      if (placeholder) return placeholder;
+      return nodeKindLabel(el);
+    };
+    const walk = (el) => {
+      if (!el || result.length >= limit) return;
+      const role = roleOf(el);
+      const name = nameOf(el);
+      const value = '';
+      if (role || name || value) result.push({ role, name, value });
+      for (const child of el.children || []) {
+        if (result.length >= limit) break;
+        if (visible(child)) walk(child);
+      }
+    };
+    walk(document.body);
+    return { url: safeUrl(), title: safeTitle(), nodes: result, redacted: true };
+  }`;
+}
+
 export function snapshot(runner, targetId, limit = 260) {
-  const resident = runner.requestBrowser?.({
-    method: 'GET',
-    path: '/snapshot',
-    query: { format: 'aria', targetId, limit },
-  }, { timeoutMs: 20000 });
-  if (resident) return resident;
-  const shot = runner.oc(['snapshot', '--target-id', targetId, '--format', 'aria', '--limit', String(limit)]);
-  return shot;
+  try {
+    const resident = runner.requestBrowser?.({
+      method: 'GET',
+      path: '/snapshot',
+      query: { format: 'aria', targetId, limit },
+    }, { timeoutMs: 20000 });
+    if (resident?.ok && Array.isArray(resident.nodes)) return resident;
+
+    const shot = runner.oc(['snapshot', '--target-id', targetId, '--format', 'aria', '--limit', String(limit)]);
+    if (shot?.ok && Array.isArray(shot.nodes)) return shot;
+  } catch (error) {
+    runner?.log?.({
+      event: 'aria-snapshot-primary-failed-fallback-dom',
+      targetId,
+      message: String(error?.message || error).slice(0, 500),
+    });
+  }
+
+  const fallback = evaluate(runner, targetId, buildDomSnapshotFallbackFn(limit));
+  const result = fallback?.result || fallback || {};
+  return {
+    ok: Array.isArray(result.nodes),
+    url: result.url || '',
+    title: result.title || '',
+    nodes: Array.isArray(result.nodes) ? result.nodes : [],
+    fallback: 'dom-accessibility',
+    redacted: true,
+  };
 }
 
 export function snapshotAi(runner, targetId, limit = 260) {
-  const resident = runner.requestBrowser?.({
-    method: 'GET',
-    path: '/snapshot',
-    query: { format: 'ai', targetId, limit },
-  }, { timeoutMs: 20000 });
-  if (resident) return resident;
   return runner.oc(['snapshot', '--target-id', targetId, '--limit', String(limit)]);
 }
 

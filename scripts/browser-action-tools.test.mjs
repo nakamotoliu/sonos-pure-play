@@ -75,7 +75,7 @@ test('choosePlaybackAction accepts normalized replace queue variants', () => {
   assert.equal(result.ok, true);
   assert.equal(result.actualLabel, '替换播放列表');
   assert.equal(result.normalizedAction, '替换队列');
-  assert.deepEqual(runner.waits, [350]);
+  assert.deepEqual(runner.waits, [200]);
 });
 
 test('openPlaybackActionMenu fails when detail page has no more-options entry', () => {

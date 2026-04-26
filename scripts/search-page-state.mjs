@@ -1,4 +1,5 @@
 import { normalizeText, normalizeWhitespace } from './normalize.mjs';
+import { classifySearchPageStateFromAriaSnapshot } from './aria-snapshot-tools.mjs';
 
 export const SEARCH_RESULTS_PAGE_KINDS = new Set([
   'SEARCH_RESULTS_MIXED',
@@ -48,6 +49,13 @@ function detectSearchPageStateInDom(options = {}) {
   const mainText = normalize(main?.innerText || '');
   const interactiveSelector = 'button,[role="button"],a,[role="link"]';
   const containerSelector = 'li,article,section,[role="listitem"],[role="region"],[role="group"]';
+  const resolveSectionHeading = (node) => {
+    for (let current = node; current && current !== main && current !== document.body; current = current.parentElement) {
+      const heading = textOf(current.querySelector?.('h1,h2,h3,h4,[role="heading"]'));
+      if (heading) return heading;
+    }
+    return '';
+  };
 
   const sectionKindOf = (value) => {
     const text = normalize(value).toLowerCase();
@@ -79,6 +87,7 @@ function detectSearchPageStateInDom(options = {}) {
   const allContainers = [...main.querySelectorAll(containerSelector)].filter(visible);
   const containers = allContainers.map((container, index) => {
     const heading = textOf(container.querySelector('h1,h2,h3,h4,[role="heading"]'));
+    const sectionHeading = heading || resolveSectionHeading(container);
     const text = textOf(container);
     const buttons = [...container.querySelectorAll(interactiveSelector)]
       .filter(visible)
@@ -103,6 +112,7 @@ function detectSearchPageStateInDom(options = {}) {
     return {
       index,
       heading,
+      sectionHeading,
       text,
       serviceMatches,
       typeCounts,
@@ -111,11 +121,14 @@ function detectSearchPageStateInDom(options = {}) {
       viewAllCount,
       typeHint,
       aggregationHint,
+      inSearchHistorySection: /搜索记录/.test(sectionHeading),
+      inServiceLibrarySection: /您的服务/.test(sectionHeading),
     };
   });
 
-  const aggregationContainers = containers.filter((entry) => entry.aggregationHint && (entry.viewAllCount > 0 || entry.playCount > 0));
-  const candidateContainers = containers.filter((entry) => entry.typeHint && (entry.playCount > 0 || entry.viewAllCount > 0 || Object.values(entry.typeCounts).some((value) => value > 0)));
+  const resultLikeContainers = containers.filter((entry) => !entry.inSearchHistorySection && !entry.inServiceLibrarySection);
+  const aggregationContainers = resultLikeContainers.filter((entry) => entry.aggregationHint && (entry.viewAllCount > 0 || entry.playCount > 0));
+  const candidateContainers = resultLikeContainers.filter((entry) => entry.typeHint && (entry.playCount > 0 || entry.viewAllCount > 0 || Object.values(entry.typeCounts).some((value) => value > 0)));
   const structuralCardCount = candidateContainers.length + aggregationContainers.length;
   const candidateCount = [...new Set([
     ...candidateContainers.map((entry) => entry.index),
@@ -135,7 +148,7 @@ function detectSearchPageStateInDom(options = {}) {
     .filter((label) => /^播放/.test(label))
     .length;
   const serviceLabels = [...new Set((mainText.match(/网易云音乐|QQ音乐/g) || []).filter(Boolean))];
-  const serviceSectionCount = containers.filter((entry) => entry.serviceMatches.length > 0).length;
+  const serviceSectionCount = resultLikeContainers.filter((entry) => entry.serviceMatches.length > 0).length;
 
   const queryVisibleSomewhere = Boolean(expectedQuery) && (
     visibleQueryInInput ||
@@ -346,3 +359,5 @@ export function describeUnifiedSearchState(state = {}) {
   const summary = summarizeUnifiedSearchState(state);
   return normalizeWhitespace(JSON.stringify(summary));
 }
+
+export { classifySearchPageStateFromAriaSnapshot };

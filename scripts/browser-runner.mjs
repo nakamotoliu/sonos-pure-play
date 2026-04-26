@@ -60,7 +60,7 @@ import {
 
 const DEFAULT_GATEWAY_PORT = '18789';
 const DEFAULT_OPENCLAW_CONFIG_PATH = path.join(os.homedir(), '.openclaw', 'openclaw.json');
-const DEFAULT_SONOS_BROWSER_PROFILE = 'openclaw';
+const DEFAULT_SONOS_BROWSER_PROFILE = 'openclaw-headless';
 const LOGIN_RECOVERY_SENTINEL = '__SONOS_LOGIN_RECOVERY_ACTIVE__';
 const LOCAL_LOGIN_HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'login-recovery.local.mjs');
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));

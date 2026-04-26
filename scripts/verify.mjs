@@ -2,6 +2,16 @@ import { normalizeText, normalizeWhitespace, SkillError } from './normalize.mjs'
 
 export const MAX_PLAYBACK_ATTEMPTS = 3;
 
+const COPYRIGHT_UNAVAILABLE_PATTERNS = [
+  /应版权方要求暂不能播放/,
+  /版权方要求暂不能播放/,
+  /暂不能播放/,
+  /无法播放/,
+  /unavailable/i,
+  /not available/i,
+  /copyright/i,
+];
+
 function buildRetryMeta(reason, retryable) {
   return {
     retryable: Boolean(retryable),
@@ -11,6 +21,49 @@ function buildRetryMeta(reason, retryable) {
 
 export function isRetryablePlaybackVerificationFailure(error) {
   return Boolean(error?.phase === 'verify-cli' && error?.data?.retryable);
+}
+
+export function textLooksCopyrightUnavailable(text) {
+  const value = String(text || '');
+  return COPYRIGHT_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function queueUnavailableEvidence(queueJson) {
+  const items = Array.isArray(queueJson?.items) ? queueJson.items : [];
+  const unavailableItems = [];
+  for (const entry of items) {
+    const item = entry?.item || entry || {};
+    const text = [
+      item.title,
+      item.artist,
+      item.album,
+      item.uri,
+      entry.title,
+      entry.artist,
+      entry.album,
+      entry.uri,
+    ].filter(Boolean).join(' ');
+    if (textLooksCopyrightUnavailable(text)) {
+      unavailableItems.push({
+        position: entry?.position ?? null,
+        title: item.title || entry.title || null,
+        artist: item.artist || entry.artist || null,
+        album: item.album || entry.album || null,
+      });
+    }
+  }
+  return unavailableItems;
+}
+
+function statusUnavailableEvidence(status) {
+  const text = [status?.title, status?.artist, status?.album, status?.raw].filter(Boolean).join(' ');
+  return textLooksCopyrightUnavailable(text)
+    ? {
+        title: status?.title || null,
+        artist: status?.artist || null,
+        album: status?.album || null,
+      }
+    : null;
 }
 
 function groupIncludesRoom(group, room) {
@@ -70,13 +123,19 @@ export function verifyMediaPlayback({
   }
 
   if (String(effectiveStatus?.state || '').toUpperCase() !== 'PLAYING') {
+    const unavailableStatus = statusUnavailableEvidence(effectiveStatus);
+    const unavailableQueueItems = queueUnavailableEvidence(effectiveQueueJson);
+    const unavailableEvidence = unavailableStatus || unavailableQueueItems.length
+      ? { unavailableStatus, unavailableQueueItems }
+      : null;
     throw new SkillError('verify-cli', 'CLI_VERIFY_FAILED', 'Sonos CLI did not confirm PLAYING after the web action.', {
       room,
       actionName,
       finalState: effectiveStatus?.state || null,
       finalTitle: effectiveStatus?.title || null,
       finalTrack: effectiveStatus?.track || null,
-      ...buildRetryMeta('not-playing-after-action', true),
+      unavailableEvidence,
+      ...buildRetryMeta(unavailableEvidence ? 'copyright-unavailable' : 'not-playing-after-action', true),
     });
   }
 

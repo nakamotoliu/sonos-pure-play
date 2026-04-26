@@ -268,7 +268,7 @@ const logger = (event) => {
     appendRunRecord({ kind: 'runner-event', ...event });
   }
 };
-const runner = new PurePlayBrowserRunner({ logger, profile: process.env.OPENCLAW_BROWSER_PROFILE || 'openclaw' });
+const runner = new PurePlayBrowserRunner({ logger, profile: process.env.OPENCLAW_BROWSER_PROFILE || 'openclaw-headless' });
 
 let finalizedBySignal = false;
 function closeRunnerForExit(kind) {

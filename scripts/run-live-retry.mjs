@@ -1,7 +1,7 @@
 import { normalizeText } from './normalize.mjs';
 import { isRetryablePlaybackVerificationFailure } from './verify.mjs';
 
-export const DEFAULT_MAX_CANDIDATES_PER_QUERY = Number(process.env.SONOS_MAX_CANDIDATES_PER_QUERY || 2);
+export const DEFAULT_MAX_CANDIDATES_PER_QUERY = Number(process.env.SONOS_MAX_CANDIDATES_PER_QUERY || 4);
 
 function candidateKey(candidate = {}) {
   return [candidate.title, candidate.type, candidate.playLabel]

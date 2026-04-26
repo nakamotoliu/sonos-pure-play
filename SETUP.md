@@ -15,10 +15,10 @@ Make sure:
 - the chosen browser profile can access Sonos Web
 
 Recommended profile for this skill:
-- browser runtime profile name: `openclaw`
+- browser runtime profile name: `openclaw-headless`
 - use this as the default profile name unless you have a strong reason to override it
 
-If `openclaw` does not exist yet in `~/.openclaw/openclaw.json`, create it first.
+If `openclaw-headless` does not exist yet in `~/.openclaw/openclaw.json`, create it first.
 
 Minimal example:
 
@@ -32,6 +32,12 @@ Minimal example:
         "cdpPort": 18800,
         "driver": "openclaw",
         "color": "#4285F4"
+      },
+      "openclaw-headless": {
+        "cdpPort": 18801,
+        "driver": "openclaw",
+        "color": "#111827",
+        "headless": true
       }
     }
   }
@@ -39,28 +45,28 @@ Minimal example:
 ```
 
 Notes:
-- `profiles.openclaw` is the important part for this skill
-- you do not need to change `browser.defaultProfile` if your normal default should stay `openclaw`
-- headless is optional for this skill, not required; if you want background execution, you can set `headless: true` at the profile level as a recommended setup choice
-- headed mode is also supported when you want visible debugging or manual observation
+- `profiles.openclaw-headless` is the important part for this skill
+- keep `browser.defaultProfile` and `profiles.openclaw` usable for normal headed/debug browser work
+- do not set global `browser.headless` just for Sonos; put `headless: true` on `browser.profiles.openclaw-headless`
+- headed mode is still supported for debugging by explicitly selecting another prepared profile
 - if your config already has a `browser` section, merge this into it instead of replacing unrelated keys
 
 Example check:
 
 ```bash
-openclaw browser --browser-profile openclaw tabs
+openclaw browser --browser-profile openclaw-headless tabs
 printenv OPENCLAW_BROWSER_PROFILE
 ```
 
 Confirm that the printed `OPENCLAW_BROWSER_PROFILE` value is the browser runtime profile you intend to use.
-Also confirm that your config file contains `browser.profiles.openclaw` when that is the profile you plan to use.
+Also confirm that your config file contains `browser.profiles.openclaw-headless` when using the recommended Sonos profile.
 
 Profile rules:
 - CLI root `--profile <name>` switches the OpenClaw instance/state directory to `~/.openclaw-<name>`.
 - Browser CLI must use `--browser-profile <name>`.
 - Wrong example: `openclaw browser tabs --profile openclaw`
 - Correct examples:
-  - `openclaw browser --browser-profile openclaw tabs`
+  - `openclaw browser --browser-profile openclaw-headless tabs`
   - `openclaw browser --browser-profile user tabs`
 
 ## 3. Log into Sonos Web
@@ -81,12 +87,12 @@ https://play.sonos.com/zh-cn/web-app
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-export OPENCLAW_BROWSER_PROFILE="openclaw"
+export OPENCLAW_BROWSER_PROFILE="openclaw-headless"
 ```
 
 `OPENCLAW_BROWSER_PROFILE` here means the browser runtime profile only. Do not use OpenClaw CLI global `--profile openclaw` for this skill.
 If browser commands fail with `gateway token missing` and the path points at `~/.openclaw-xxx`, first check for mistaken CLI root `--profile` usage.
-`OPENCLAW_BROWSER_HEADLESS` is optional and usually unnecessary when using the default `openclaw` profile.
+`OPENCLAW_BROWSER_HEADLESS` is optional and usually unnecessary when using the default `openclaw-headless` profile.
 
 ## 5. Run a minimal smoke test
 

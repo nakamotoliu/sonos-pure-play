@@ -19,11 +19,12 @@ It is **not** a zero-config package.
 Before this skill can work reliably, the operator must have a usable OpenClaw browser runtime profile for Sonos Web.
 
 Recommended default:
-- browser runtime profile name: `openclaw`
-- `browser.profiles.openclaw` present in `~/.openclaw/openclaw.json`
+- browser runtime profile name: `openclaw-headless`
+- `browser.profiles.openclaw-headless` present in `~/.openclaw/openclaw.json`
+- `browser.profiles.openclaw-headless.headless=true`
 - Sonos Web already logged in inside that profile
 
-If `openclaw` does not exist yet, do that first. Do not treat profile creation as an optional refinement.
+If `openclaw-headless` does not exist yet, do that first. Do not treat headless profile creation as an optional refinement.
 
 Minimal browser profile config example:
 
@@ -37,13 +38,19 @@ Minimal browser profile config example:
         "cdpPort": 18800,
         "driver": "openclaw",
         "color": "#4285F4"
+      },
+      "openclaw-headless": {
+        "cdpPort": 18801,
+        "driver": "openclaw",
+        "color": "#111827",
+        "headless": true
       }
     }
   }
 }
 ```
 
-This skill uses `openclaw` as the default browser runtime profile.
+This skill uses `openclaw-headless` as the default browser runtime profile.
 
 After adding the profile, continue with [SETUP.md](./SETUP.md).
 
@@ -125,23 +132,22 @@ Score notes:
 1. **OpenClaw**
 2. **OpenClaw browser runtime**
 3. **Sonos CLI**
-4. **A created browser runtime profile for this skill, recommended: `openclaw`**
+4. **A created browser runtime profile for this skill, recommended: `openclaw-headless`**
 5. **A logged-in Sonos Web session in that browser profile**
 
 The browser profile used by this skill must:
 - already be able to access Sonos Web
 - expose the real Sonos Web tab the skill will operate on
-- allow foreground focus when running headed, or preserve a valid login session when running headless
+- preserve a valid login session in the dedicated headless profile; use a separate headed/debug profile only when explicitly selected
 
 ### Optional
 1. **Custom browser profile override**
    - use `OPENCLAW_BROWSER_PROFILE` only if it still points to the intended browser runtime profile
-2. **Recommended setup choice for background execution**
-   - if you prefer background execution, set `browser.profiles.<name>.headless=true` in `~/.openclaw/openclaw.json` for the selected browser profile
-   - Sonos reads profile-level `headless` first, then falls back to global `browser.headless`
-   - this is a recommended setup option, not a hard requirement
+2. **Headed/debug execution**
+   - explicitly select another prepared profile, for example `OPENCLAW_BROWSER_PROFILE=openclaw`
+   - keep this as an exception for debugging, not the skill default
 3. **Optional runner-side override**
-   - `OPENCLAW_BROWSER_HEADLESS=true` still forces skill-side headless detection before config lookup
+   - `OPENCLAW_BROWSER_HEADLESS=true` still forces skill-side headless detection before config lookup, but the preferred path is the dedicated headless profile
 
 ## Environment Variables
 
@@ -154,7 +160,7 @@ Important variables:
   Optional. Defaults to the local gateway when supported by your runtime.
 - `OPENCLAW_BROWSER_PROFILE`
   Optional browser-profile selector for `openclaw browser` commands only.
-  Default: `openclaw`
+  Default: `openclaw-headless`
 - `OPENCLAW_BROWSER_HEADLESS`
   Optional override for skill-side runtime detection.
   Accepted values: `true/false`, `1/0`, `yes/no`, `on/off`
@@ -163,8 +169,9 @@ Example:
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-export OPENCLAW_BROWSER_PROFILE="openclaw"
-export OPENCLAW_BROWSER_HEADLESS="false"
+export OPENCLAW_BROWSER_PROFILE="openclaw-headless"
+# Usually unnecessary when using openclaw-headless.
+# export OPENCLAW_BROWSER_HEADLESS="true"
 ```
 
 Important distinction:
@@ -180,7 +187,7 @@ openclaw browser tabs --profile openclaw
 Correct examples:
 
 ```bash
-openclaw browser --browser-profile openclaw tabs
+openclaw browser --browser-profile openclaw-headless tabs
 openclaw browser --browser-profile user tabs
 ```
 
@@ -188,11 +195,11 @@ openclaw browser --browser-profile user tabs
 
 1. Install OpenClaw
 2. Install Sonos CLI
-3. Create the browser runtime profile used by this skill, recommended: `openclaw`
+3. Create the browser runtime profile used by this skill, recommended: `openclaw-headless`
 4. Start the OpenClaw gateway/browser runtime
 5. Make sure the selected browser profile is usable for Sonos Web and already logged in before starting playback runs
-6. If running headed, make sure the Sonos tab can be brought to a real frontmost browser window
-7. If running headless, prefer a browser profile that already holds a valid Sonos Web login session for more reliable background execution
+6. Log into Sonos Web once in `openclaw-headless` so the headless profile has a valid session
+7. For headed debugging, explicitly choose a separate prepared profile instead of changing the Sonos default
 
 ## Preflight Check
 
@@ -200,7 +207,7 @@ Before use, confirm:
 
 ```bash
 sonos discover
-openclaw browser --browser-profile openclaw tabs
+openclaw browser --browser-profile openclaw-headless tabs
 printenv OPENCLAW_BROWSER_PROFILE
 ```
 
@@ -208,9 +215,9 @@ Expected results:
 - `sonos discover` returns your speakers
 - browser tab inspection works
 - `OPENCLAW_BROWSER_PROFILE` matches the intended browser runtime profile
-- `openclaw` already exists in `~/.openclaw/openclaw.json` if that is the selected profile
+- `openclaw-headless` already exists in `~/.openclaw/openclaw.json` if that is the selected profile
 - a Sonos Web tab can be opened or already exists in that profile
-- the runtime mode matches your expectation (`browser.profiles.<name>.headless`, `browser.headless`, or `OPENCLAW_BROWSER_HEADLESS=...`)
+- the runtime mode matches your expectation (`browser.profiles.openclaw-headless.headless=true`); avoid using global `browser.headless` for Sonos
 
 ## Run Path
 
@@ -296,6 +303,11 @@ Excluded from the skill surface:
 
 If a local automation depends on personal preferences or a private history file, keep it outside the maintained skill surface.
 
+Local runtime artifacts:
+- tab hints are local cache only and may be written under the operator's OpenClaw cache directory
+- fallback snapshots must not persist freeform visible DOM text, typed input values, credentials, cookies, or account/session data
+- logs and failure artifacts must stay generic or redacted before they are shared outside the machine
+
 ## Files Worth Knowing
 
 - `SKILL.md`
@@ -310,6 +322,25 @@ If a local automation depends on personal preferences or a private history file,
 ## Update Log
 
 This section is required by SOP. Every privacy/code-review update should append the specific change set here.
+
+### 2026-04-26
+- Tracking: workspace state before the next public push
+- Changed:
+  - moved the default Sonos browser runtime profile to `openclaw-headless`
+  - hardened browser tab reuse, search-page recovery, query-gate retries, and playback verification paths
+  - changed the DOM snapshot fallback to return only redacted structural labels instead of freeform visible text or input values
+- Added:
+  - aria-snapshot helper tests and live diagnostic entrypoints for query/surface/playback checks
+  - setup notes for the dedicated headless browser profile and CLI-vs-browser profile distinction
+- Removed:
+  - stale unit tests that no longer match the current live browser-runner architecture
+  - global `browser.headless` guidance in favor of per-profile headless configuration
+- Impact:
+  - default background runs use the dedicated Sonos browser profile
+  - privacy risk from fallback snapshots is reduced by omitting freeform DOM text and input values
+- Config/runtime impact:
+  - set `OPENCLAW_BROWSER_PROFILE=openclaw-headless` for Sonos browser runs
+  - Sonos Web login/session readiness in that profile remains a prerequisite
 
 ### 2026-04-22
 - Tracking: workspace state after Sonos privacy-boundary cleanup
