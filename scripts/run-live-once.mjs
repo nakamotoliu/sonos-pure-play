@@ -360,7 +360,7 @@ try {
     targetId,
     context: { room },
     action: () => runner.readRoomSyncState(targetId, room),
-    verify: (result) => ({ ok: Boolean(result?.roomVisible || result?.roomCardFound), result }),
+    verify: (result) => ({ ok: Boolean(result?.ok === false ? false : (result?.roomVisible || result?.roomCardFound)), result }),
   }).actionResult;
   emit({ phase: 'room-sync-before', roomSync });
   let roomSyncAfter = roomSync;

@@ -157,6 +157,10 @@ async function main() {
           latestStepStartedAt = Date.now();
           latestStep = null;
         }
+        if (parsed?.phase === 'browser-runner' && parsed?.event === 'step-failed') {
+          latestStepStartedAt = Date.now();
+          latestStep = null;
+        }
         if (parsed?.phase === 'browser-runner' && parsed?.event === 'ensure-sonos-tab-stage-start') {
           latestEnsureStage = parsed.stage || latestEnsureStage;
           latestEnsureStageStartedAt = Date.now();
@@ -292,6 +296,7 @@ async function main() {
   }, HARD_TIMEOUT_MS);
 
   child.on('exit', (code, signal) => {
+    finalized = true;
     clearInterval(watchdog);
     clearTimeout(hardTimer);
     process.stdout.write(buffer);

@@ -1,19 +1,57 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
-const OPENCLAW_CALL_MODULE = '/opt/homebrew/lib/node_modules/openclaw/dist/call-DQa6BWy2.js';
-const OPENCLAW_CHANNEL_MODULE = '/opt/homebrew/lib/node_modules/openclaw/dist/message-channel-CMzhST9r.js';
+const OPENCLAW_DIST_DIR = '/opt/homebrew/lib/node_modules/openclaw/dist';
 
 let runtimePromise = null;
 
+
+function newestDistFile(pattern) {
+  const files = fs.readdirSync(OPENCLAW_DIST_DIR)
+    .filter((file) => pattern.test(file))
+    .map((file) => {
+      const fullPath = path.join(OPENCLAW_DIST_DIR, file);
+      return { file, fullPath, mtimeMs: fs.statSync(fullPath).mtimeMs };
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  if (!files.length) throw new Error(`OpenClaw dist module not found: ${pattern}`);
+  return files[0].fullPath;
+}
+
+async function importFirst(candidates) {
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      return await import(candidate.startsWith('file:') ? candidate : `file://${candidate}`);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 async function loadRuntime() {
   runtimePromise ??= Promise.all([
-    import(OPENCLAW_CALL_MODULE),
-    import(OPENCLAW_CHANNEL_MODULE),
-  ]).then(([callModule, channelModule]) => ({
-    callGateway: callModule.r,
-    clientNames: channelModule.g,
-    clientModes: channelModule.h,
-  }));
+    importFirst([
+      path.join(OPENCLAW_DIST_DIR, 'call-GfQsJ3MY.js'),
+      newestDistFile(/^call-[A-Za-z0-9_-]+\.js$/),
+    ]),
+    importFirst([
+      path.join(OPENCLAW_DIST_DIR, 'message-channel-C2Lnao8s.js'),
+      ...fs.readdirSync(OPENCLAW_DIST_DIR)
+        .filter((file) => /^message-channel-[A-Za-z0-9_-]+\.js$/.test(file) && !/^message-channel-core-/.test(file))
+        .map((file) => path.join(OPENCLAW_DIST_DIR, file)),
+    ]),
+  ]).then(([callModule, channelModule]) => {
+    const callGateway = callModule.callGateway || callModule.r;
+    const clientNames = callModule.GATEWAY_CLIENT_NAMES || channelModule.GATEWAY_CLIENT_NAMES || channelModule.g;
+    const clientModes = callModule.GATEWAY_CLIENT_MODES || channelModule.GATEWAY_CLIENT_MODES || channelModule.h;
+    if (!callGateway || !clientNames?.CLI || !clientModes?.CLI) {
+      throw new Error('OpenClaw gateway runtime exports not found');
+    }
+    return { callGateway, clientNames, clientModes };
+  });
   return runtimePromise;
 }
 
