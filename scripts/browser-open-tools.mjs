@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { SkillError } from './normalize.mjs';
-import { SEARCH_URL, SONOS_HOST } from './selectors.mjs';
+import { SEARCH_URL, SONOS_HOST, SONOS_IDENTITY_HOST, SONOS_LOGIN_HOST } from './selectors.mjs';
 
 const TAB_HINT_FILE = path.join(os.homedir(), '.openclaw', 'cache', 'sonos-tab-hint.json');
 const ENABLE_TABS_BEFORE_START_PROBE = process.env.SONOS_ENABLE_TABS_BEFORE_START_PROBE === '1';
@@ -63,6 +63,37 @@ function clearTabHint() {
   } catch {}
 }
 
+function isSonosAppUrl(url) {
+  return String(url || '').includes(SONOS_HOST);
+}
+
+function isSonosLoginUrl(url) {
+  const value = String(url || '');
+  return value.includes(SONOS_LOGIN_HOST) || value.includes(SONOS_IDENTITY_HOST);
+}
+
+function scoreSonosAppTab(entry, index = 0) {
+  const url = String(entry?.url || '');
+  if (!isSonosAppUrl(url)) return -10000;
+  let score = index;
+  if (url.includes('/search')) score += 1000;
+  else if (url.includes('/web-app')) score += 900;
+  else if (url.includes('/browse/services/')) score += 650;
+  else score += 300;
+  return score;
+}
+
+function chooseBestSonosAppTab(sonosTabs) {
+  return (sonosTabs || [])
+    .map((entry, index) => ({ entry, score: scoreSonosAppTab(entry, index) }))
+    .filter((item) => item.entry?.targetId && item.score > -10000)
+    .sort((left, right) => right.score - left.score)[0]?.entry || null;
+}
+
+function chooseBestSonosAuthTab(allTabs) {
+  return (allTabs || []).filter((entry) => entry?.targetId && isSonosLoginUrl(entry?.url)).slice(-1)[0] || null;
+}
+
 function withSoftTimeout(fn, timeoutMs, onTimeout) {
   const startedAt = Date.now();
   try {
@@ -88,12 +119,12 @@ function findMatchingHintTab(runner, hint) {
     const allTabs = tabs(runner);
     const hintedUrl = String(hint?.url || '');
     const byId = hint?.targetId ? allTabs.find((entry) => entry?.targetId === hint.targetId) : null;
-    if (byId && String(byId.url || '').includes(SONOS_HOST)) return byId;
+    if (byId && isSonosAppUrl(byId.url)) return byId;
     if (hintedUrl) {
       const byUrl = allTabs.find((entry) => String(entry?.url || '') === hintedUrl);
-      if (byUrl && String(byUrl.url || '').includes(SONOS_HOST)) return byUrl;
+      if (byUrl && isSonosAppUrl(byUrl.url)) return byUrl;
     }
-    return allTabs.filter((entry) => String(entry?.url || '').includes(SONOS_HOST)).slice(-1)[0] || null;
+    return chooseBestSonosAppTab(allTabs.filter((entry) => isSonosAppUrl(entry?.url)));
   } catch {
     return null;
   }
@@ -126,7 +157,25 @@ export function start(runner) {
 }
 
 function readSonosTabs(runner) {
-  return tabs(runner).filter((entry) => String(entry.url || '').includes(SONOS_HOST));
+  return tabs(runner).filter((entry) => isSonosAppUrl(entry.url));
+}
+
+function closeNonAppSonosTabs(runner, allTabs) {
+  const loginTabs = (allTabs || []).filter((entry) => isSonosLoginUrl(entry?.url));
+  if (!loginTabs.length) return [];
+
+  const closedTargetIds = [];
+  for (const entry of loginTabs) {
+    if (!entry?.targetId) continue;
+    runEnsureStage(runner, 'close-sonos-login-tab', () => close(runner, entry.targetId), {
+      targetId: entry.targetId,
+      url: entry.url || null,
+    });
+    closedTargetIds.push(entry.targetId);
+    runner.log({ event: 'sonos-login-tab-closed', targetId: entry.targetId, url: entry.url || null });
+  }
+
+  return closedTargetIds;
 }
 
 export function ensureSonosTab(runner) {
@@ -140,6 +189,17 @@ export function ensureSonosTab(runner) {
       const hintedTargetId = matchedHintTab.targetId;
       const hintedUrl = String(matchedHintTab.url || hint.url || '');
       writeTabHint(hintedTargetId, hintedUrl);
+      try {
+        const closedLoginTargetIds = closeNonAppSonosTabs(runner, tabs(runner));
+        if (closedLoginTargetIds.length) {
+          runEnsureStage(runner, 'sonos-login-tab-hygiene-settle', () => waitMs(runner, 250), {
+            closedTargetIds: closedLoginTargetIds,
+            source: 'hint',
+          });
+        }
+      } catch (error) {
+        runner.log({ event: 'sonos-login-tab-hygiene-failed', source: 'hint', message: String(error?.message || error) });
+      }
       if (runner.requiresForeground()) {
         try {
           focus(runner, hintedTargetId);
@@ -233,13 +293,35 @@ export function ensureSonosTab(runner) {
     }
   }
 
-  let sonosTabs = allTabs.filter((entry) => String(entry.url || '').includes(SONOS_HOST));
-  if (!sonosTabs.length) sonosTabs = readSonosTabs(runner);
+  let sonosTabs = allTabs.filter((entry) => isSonosAppUrl(entry.url));
+  let authTab = null;
+  if (!sonosTabs.length) authTab = chooseBestSonosAuthTab(allTabs);
+  if (!sonosTabs.length && !authTab) sonosTabs = readSonosTabs(runner);
   runner.log({ event: 'ensure-sonos-tab-after-tabs', count: sonosTabs.length, targetIds: sonosTabs.map((entry) => entry?.targetId).filter(Boolean) });
 
+  if (!sonosTabs.length && authTab?.targetId) {
+    clearTabHint();
+    runner.log({
+      event: 'tab-ready-login-blocked',
+      targetId: authTab.targetId,
+      url: authTab.url || null,
+      profile: runner.profile,
+      interactionMode: runner.interactionMode(),
+      source: 'existing-auth-tab',
+    });
+    return authTab.targetId;
+  }
+
+  const closedLoginTargetIds = closeNonAppSonosTabs(runner, allTabs);
+  if (closedLoginTargetIds.length) {
+    runEnsureStage(runner, 'sonos-login-tab-hygiene-settle', () => waitMs(runner, 250), {
+      closedTargetIds: closedLoginTargetIds,
+    });
+  }
+
   if (sonosTabs.length > 1) {
-    const keepTab = sonosTabs[sonosTabs.length - 1];
-    const closeTabs = sonosTabs.slice(0, -1);
+    const keepTab = chooseBestSonosAppTab(sonosTabs);
+    const closeTabs = sonosTabs.filter((entry) => entry?.targetId !== keepTab?.targetId);
     const closedTargetIds = [];
 
     for (const entry of closeTabs) {
@@ -264,7 +346,7 @@ export function ensureSonosTab(runner) {
     sonosTabs = runEnsureStage(runner, 'tabs-after-hygiene', () => readSonosTabs(runner));
   }
 
-  let tab = sonosTabs[sonosTabs.length - 1];
+  let tab = chooseBestSonosAppTab(sonosTabs);
 
   if (!tab) {
     runner.log({ event: 'ensure-sonos-tab-open-search-url', url: SEARCH_URL });
@@ -274,10 +356,24 @@ export function ensureSonosTab(runner) {
     while (Date.now() < deadline) {
       pollIndex += 1;
       runEnsureStage(runner, 'poll-open-wait', () => waitMs(runner, 250), { pollIndex });
-      sonosTabs = runEnsureStage(runner, 'poll-open-tabs', () => readSonosTabs(runner), { pollIndex });
-      tab = sonosTabs[sonosTabs.length - 1];
+      const polledTabs = runEnsureStage(runner, 'poll-open-tabs', () => tabs(runner), { pollIndex });
+      sonosTabs = polledTabs.filter((entry) => isSonosAppUrl(entry.url));
+      authTab = chooseBestSonosAuthTab(polledTabs);
+      tab = chooseBestSonosAppTab(sonosTabs);
       runner.log({ event: 'ensure-sonos-tab-poll-open', pollIndex, count: sonosTabs.length, targetIds: sonosTabs.map((entry) => entry?.targetId).filter(Boolean) });
       if (tab?.targetId) break;
+      if (authTab?.targetId) {
+        clearTabHint();
+        runner.log({
+          event: 'tab-ready-login-blocked',
+          targetId: authTab.targetId,
+          url: authTab.url || null,
+          profile: runner.profile,
+          interactionMode: runner.interactionMode(),
+          source: 'open-search-redirect',
+        });
+        return authTab.targetId;
+      }
     }
   }
 

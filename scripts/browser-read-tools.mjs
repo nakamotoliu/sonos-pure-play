@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { buildReadLayeredPageStateFn } from './dom-layers.mjs';
 import { classifyRoomActiveState } from './room-active-detector.mjs';
+import { SONOS_IDENTITY_HOST, SONOS_LOGIN_HOST } from './selectors.mjs';
 
 export function evaluate(runner, targetId, fnSource) {
   const resident = runner.actBrowser?.({ kind: 'evaluate', targetId, fn: fnSource }, { timeoutMs: runner.browserCommandTimeoutMs || 90000 });
@@ -169,6 +170,24 @@ export function readRoomContext(runner, targetId) {
 }
 
 export function readRoomSyncState(runner, targetId, room) {
+  const pageState = readPageState(runner, targetId);
+  const pageUrl = String(pageState?.url || '');
+  if (pageState?.loginBlocked || pageState?.challengeRequired || pageUrl.includes(SONOS_LOGIN_HOST) || pageUrl.includes(SONOS_IDENTITY_HOST)) {
+    return {
+      ok: false,
+      code: pageState?.challengeRequired ? 'LOGIN_CHALLENGE_REQUIRED' : 'SONOS_WEB_PROFILE_LOGGED_OUT',
+      loginBlocked: Boolean(pageState?.loginBlocked),
+      challengeRequired: Boolean(pageState?.challengeRequired),
+      url: pageState?.url || null,
+      title: pageState?.title || '',
+      targetRoom: room,
+      roomVisible: false,
+      roomCardFound: false,
+      activeRoomConfirmed: false,
+      bodyPreview: pageState?.layers?.search?.[0] || '',
+    };
+  }
+
   const result = evaluate(
     runner,
     targetId,

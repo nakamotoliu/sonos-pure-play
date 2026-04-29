@@ -113,12 +113,23 @@ export function verifyMediaPlayback({
     });
   }
 
+  let retryPlayError = null;
+  let retrySnapshotError = null;
+
   if (String(effectiveStatus?.state || '').toUpperCase() !== 'PLAYING' && typeof retryPlay === 'function') {
-    retryPlay();
+    try {
+      retryPlay();
+    } catch (error) {
+      retryPlayError = error;
+    }
     if (typeof retrySnapshot === 'function') {
-      const snapshot = retrySnapshot();
-      if (snapshot?.status) effectiveStatus = snapshot.status;
-      if (snapshot?.queueJson) effectiveQueueJson = snapshot.queueJson;
+      try {
+        const snapshot = retrySnapshot();
+        if (snapshot?.status) effectiveStatus = snapshot.status;
+        if (snapshot?.queueJson) effectiveQueueJson = snapshot.queueJson;
+      } catch (error) {
+        retrySnapshotError = error;
+      }
     }
   }
 
@@ -135,6 +146,18 @@ export function verifyMediaPlayback({
       finalTitle: effectiveStatus?.title || null,
       finalTrack: effectiveStatus?.track || null,
       unavailableEvidence,
+      retryPlayError: retryPlayError ? {
+        phase: retryPlayError?.phase || null,
+        code: retryPlayError?.code || null,
+        message: retryPlayError?.message || String(retryPlayError),
+        data: retryPlayError?.data || null,
+      } : null,
+      retrySnapshotError: retrySnapshotError ? {
+        phase: retrySnapshotError?.phase || null,
+        code: retrySnapshotError?.code || null,
+        message: retrySnapshotError?.message || String(retrySnapshotError),
+        data: retrySnapshotError?.data || null,
+      } : null,
       ...buildRetryMeta(unavailableEvidence ? 'copyright-unavailable' : 'not-playing-after-action', true),
     });
   }

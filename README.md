@@ -11,6 +11,7 @@ This package is intended for users who already have:
 - OpenClaw working
 - Sonos CLI working
 - A usable Sonos Web login session in the browser profile they plan to use
+- A local-only login recovery provider configured outside tracked files if they want automated login recovery
 
 It is **not** a zero-config package.
 
@@ -82,6 +83,7 @@ Known limitations:
 - Sonos Web can still behave inconsistently depending on account/service state
 - if the selected browser profile is logged out, playback runs may stop until the operator restores a usable logged-in session
 - OTP / unexpected identity-provider challenges are still blocking conditions
+- login-page redirects are classified as browser-profile readiness failures, not as room-sync failures; stale Sonos login / identity-provider tabs are cleaned up when a usable app tab exists
 - final verification is intentionally conservative and may report failure when Sonos changes are too subtle to prove
 - this package is not focused on a CLI-only `CONTROL_ONLY` completion path
 
@@ -140,6 +142,8 @@ The browser profile used by this skill must:
 - expose the real Sonos Web tab the skill will operate on
 - preserve a valid login session in the dedicated headless profile; use a separate headed/debug profile only when explicitly selected
 
+If you enable automated login recovery, keep the provider implementation and recovery details in ignored local files. Do not publish provider names, helper paths, item names, or operator-specific recovery steps.
+
 ### Optional
 1. **Custom browser profile override**
    - use `OPENCLAW_BROWSER_PROFILE` only if it still points to the intended browser runtime profile
@@ -164,6 +168,8 @@ Important variables:
 - `OPENCLAW_BROWSER_HEADLESS`
   Optional override for skill-side runtime detection.
   Accepted values: `true/false`, `1/0`, `yes/no`, `on/off`
+- Local login-recovery provider variables
+  Optional and deployment-specific. Keep exact provider names, item names, helper paths, and recovery steps in ignored local files, not in tracked documentation.
 
 Example:
 
@@ -172,6 +178,8 @@ export OPENCLAW_GATEWAY_TOKEN="your-token"
 export OPENCLAW_BROWSER_PROFILE="openclaw-headless"
 # Usually unnecessary when using openclaw-headless.
 # export OPENCLAW_BROWSER_HEADLESS="true"
+# Optional login recovery configuration belongs in ignored local files.
+# Do not publish provider names, helper paths, item names, or recovery steps.
 ```
 
 Important distinction:
@@ -322,6 +330,24 @@ Local runtime artifacts:
 ## Update Log
 
 This section is required by SOP. Every privacy/code-review update should append the specific change set here.
+
+
+### 2026-04-29
+- Tracking: login-preflight and privacy-compliance update before public push
+- Changed:
+  - classify Sonos login / identity-provider redirects as browser-profile readiness failures instead of room-sync/search/playback failures
+  - clean stale Sonos login tabs when a usable Sonos app tab exists
+  - keep credential-provider details out of tracked documentation and examples
+- Added:
+  - login-preflight unit coverage
+  - retry metadata when verification retry hooks fail
+- Removed:
+  - public documentation of concrete credential-provider names, helper paths, item/search names, and operator-specific recovery steps
+- Impact:
+  - logged-out or challenged browser profiles now stop earlier with clearer setup errors
+  - public docs stay generic and safer for external release
+- Config/runtime impact:
+  - no required public config change; optional login recovery remains local-only and ignored
 
 ### 2026-04-26
 - Tracking: workspace state before the next public push

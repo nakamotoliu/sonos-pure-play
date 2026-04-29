@@ -148,7 +148,19 @@ async function main() {
     process.exit(0);
   }
 
-  const [room, ...requests] = args.map((item) => String(item || '').trim()).filter(Boolean);
+  const cleanedArgs = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const value = String(args[i] || '').trim();
+    if (!value) continue;
+    if (value === '--volume' || value === '-v') {
+      i += 1;
+      continue;
+    }
+    if (value.startsWith('--volume=')) continue;
+    cleanedArgs.push(value);
+  }
+
+  const [room, ...requests] = cleanedArgs;
   if (!room || requests.length === 0) {
     usage();
     process.exit(2);

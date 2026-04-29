@@ -16,6 +16,7 @@ import { analyzeIntent } from './intent.mjs';
 import { buildQueryPlan } from './query-planner.mjs';
 import { extractUsablePageBlocks, buildSelectionDecisionReport } from './browser-surface-tools.mjs';
 import { verifyMediaPlayback, MAX_PLAYBACK_ATTEMPTS } from './verify.mjs';
+import { SkillError } from './normalize.mjs';
 import { ACTION_PRIORITY, DEFAULT_ACTION } from './selectors.mjs';
 import { notifyFailureArtifact, notifySuccessArtifact, saveSuccessScreenshot } from './failure-notify.mjs';
 import {
@@ -356,11 +357,30 @@ try {
   }).actionResult;
   emit({ phase: 'browser', event: 'tab-ready', targetId });
 
+  const loginPreflight = runner.runStep('sonos-login-preflight', {
+    targetId,
+    action: () => runner.assertLoggedIn(targetId),
+    verify: (result) => ({ ok: Boolean(result?.ok), result }),
+  }).actionResult;
+  emit({ phase: 'browser', event: 'login-preflight-ok', targetId, state: loginPreflight?.state || null });
+
   const roomSync = runner.runStep('room-sync-read-before', {
     targetId,
     context: { room },
     action: () => runner.readRoomSyncState(targetId, room),
-    verify: (result) => ({ ok: Boolean(result?.ok === false ? false : (result?.roomVisible || result?.roomCardFound)), result }),
+    verify: (result) => {
+      if (result?.code === 'SONOS_WEB_PROFILE_LOGGED_OUT' || result?.code === 'LOGIN_CHALLENGE_REQUIRED' || result?.loginBlocked || result?.challengeRequired) {
+        throw new SkillError(
+          'preflight',
+          result?.code || 'SONOS_WEB_PROFILE_LOGGED_OUT',
+          result?.code === 'LOGIN_CHALLENGE_REQUIRED'
+            ? 'Sonos Web requires additional verification before playback can continue.'
+            : 'Sonos Web is logged out in the selected browser profile. Restore login for this profile before running playback.',
+          { profile: runner.profile, url: result?.url || null, result }
+        );
+      }
+      return { ok: Boolean(result?.ok === false ? false : (result?.roomVisible || result?.roomCardFound)), result };
+    },
   }).actionResult;
   emit({ phase: 'room-sync-before', roomSync });
   let roomSyncAfter = roomSync;

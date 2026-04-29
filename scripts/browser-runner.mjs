@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { SkillError } from './normalize.mjs';
-import { SEARCH_URL } from './selectors.mjs';
+import { SEARCH_URL, SONOS_IDENTITY_HOST, SONOS_LOGIN_HOST } from './selectors.mjs';
 import {
   close as closeTool,
   ensureSonosTab as ensureSonosTabTool,
@@ -295,6 +295,16 @@ export function summarizeBrowserAttachError(message) {
 
 function localLoginHelperExists() {
   return fs.existsSync(LOCAL_LOGIN_HELPER);
+}
+
+export function isSonosLoginState(state = {}) {
+  const url = String(state?.url || state?.href || '');
+  return Boolean(
+    state?.loginBlocked ||
+    state?.challengeRequired ||
+    url.includes(SONOS_LOGIN_HOST) ||
+    url.includes(SONOS_IDENTITY_HOST)
+  );
 }
 
 export class PurePlayBrowserRunner {
@@ -758,6 +768,23 @@ export class PurePlayBrowserRunner {
       });
     }
     return { ok: true, recovered: true, state: after, helperOutput: helper.output };
+  }
+
+  assertLoggedIn(targetId, { initialState = null } = {}) {
+    const state = initialState || this.readPageState(targetId) || {};
+    if (state.challengeRequired) {
+      throw new SkillError('preflight', 'LOGIN_CHALLENGE_REQUIRED', 'Sonos Web requires additional verification before playback can continue.', {
+        profile: this.profile,
+        url: state?.url || null,
+      });
+    }
+    if (isSonosLoginState(state)) {
+      throw new SkillError('preflight', 'SONOS_WEB_PROFILE_LOGGED_OUT', 'Sonos Web is logged out in the selected browser profile. Restore login for this profile before running playback.', {
+        profile: this.profile,
+        url: state?.url || null,
+      });
+    }
+    return { ok: true, state };
   }
 
   readGatewayHealth() {

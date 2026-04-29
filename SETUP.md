@@ -76,6 +76,7 @@ Login/session rule:
 - Sonos Web should already be logged in in the browser profile used by this skill.
 - Tracked skill files must not contain secrets or machine-specific handling instructions.
 - Any local-only helper mapping or cached auth artifacts must stay in ignored paths only.
+- If you use automated login recovery, keep the provider implementation and recovery details in ignored local files. Do not publish provider names, helper paths, item names, or recovery steps.
 
 Recommended destination:
 
@@ -88,6 +89,8 @@ https://play.sonos.com/zh-cn/web-app
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
 export OPENCLAW_BROWSER_PROFILE="openclaw-headless"
+# Optional login recovery configuration belongs in ignored local files.
+# Do not publish provider names, helper paths, item names, or recovery steps.
 ```
 
 `OPENCLAW_BROWSER_PROFILE` here means the browser runtime profile only. Do not use OpenClaw CLI global `--profile openclaw` for this skill.
@@ -101,6 +104,7 @@ Use the skill from the agent runtime. Do not rely on `scripts/run.mjs`; that scr
 Login expectation:
 - If Sonos Web is unexpectedly logged out, stop and report that the selected browser profile is not ready.
 - If Sonos shows an OTP / external challenge page, stop and report the block instead of faking success.
+- If the browser lands on `login.sonos.com` or `idassets.sonos.com`, fix the selected browser profile's login session before retrying; this is a preflight/profile issue, not a room-sync issue.
 
 Runtime rules to keep:
 - do not finish a media playback request through Sonos CLI alone

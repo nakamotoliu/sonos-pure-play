@@ -27,6 +27,7 @@ description: |-
 - **First-time setup**: Log into Sonos Web (play.sonos.com) once in the browser profile used by this skill.
 - Browser operations should go through the official OpenClaw browser runtime / CLI, not a custom CDP bridge.
 - Keep secrets and machine-specific handling details out of tracked skill files.
+- If local login recovery is used, every deployment/operator must keep provider implementation and recovery details in ignored local files. Do not publish credential-provider names, helper paths, item names, or operator-specific recovery steps.
 
 ## Preflight gate
 - Before starting any playback workflow, the agent should treat browser-profile readiness as a hard gate.
@@ -37,10 +38,14 @@ description: |-
 - Require an explicit config entry for the recommended `openclaw-headless` profile or any other custom Sonos profile.
 - Treat `openclaw` as a normal/debug profile, not the Sonos default.
 - If the selected profile itself is missing, browser runtime is not usable, or Sonos Web is logged out in that profile, do not continue into search, candidate selection, or playback actions.
+- Treat `https://login.sonos.com/` and `https://idassets.sonos.com/...` pages as logged-out/profile-not-ready states, not as room-sync failures.
+- When a usable Sonos app tab exists, close stale Sonos login / identity-provider tabs during tab hygiene so they do not interfere with future tab selection.
+- If only login / identity-provider Sonos tabs exist after opening Sonos Web, stop at the login preflight with `SONOS_WEB_PROFILE_LOGGED_OUT` or `LOGIN_CHALLENGE_REQUIRED`; do not continue to `room-sync-read-before`.
 - Stop early and direct the operator to:
   - [README.md](./README.md)
   - [SETUP.md](./SETUP.md)
 - Missing browser/profile setup or missing Sonos session is an operator-preparation problem.
+- Missing or wrong local login-recovery setup is also an operator-preparation problem; report it as setup work, not as a Sonos playback failure.
 - Do not treat headless itself as a preflight requirement; readiness is about a usable prepared profile, not a forced runtime mode.
 
 ## Browser profile hard rules
@@ -206,6 +211,7 @@ The skill, not code, defines the business flow. Follow these steps in order and 
   - invent a new business flow
   - invent new permanent selectors during a run
   - bypass the dedicated playback-menu helper with a generic click path
+  - report login-page failures as room-sync/search/playback failures
   - persist secrets or machine-specific handling instructions into tracked files
   - change code during a playback run
 

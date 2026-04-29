@@ -1,4 +1,6 @@
 export const SONOS_HOST = 'play.sonos.com';
+export const SONOS_LOGIN_HOST = 'login.sonos.com';
+export const SONOS_IDENTITY_HOST = 'idassets.sonos.com';
 export const SONOS_URL = 'https://play.sonos.com/zh-cn/web-app';
 export const SEARCH_URL = 'https://play.sonos.com/zh-cn/search';
 
