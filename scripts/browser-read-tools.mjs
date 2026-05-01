@@ -5,8 +5,6 @@ import { SONOS_IDENTITY_HOST, SONOS_LOGIN_HOST } from './selectors.mjs';
 import { getStatus } from './cli-control.mjs';
 
 export function evaluate(runner, targetId, fnSource) {
-  const resident = runner.actBrowser?.({ kind: 'evaluate', targetId, fn: fnSource }, { timeoutMs: runner.browserCommandTimeoutMs || 90000 });
-  if (resident) return resident;
   return runner.oc(['evaluate', '--target-id', targetId, '--fn', fnSource]);
 }
 

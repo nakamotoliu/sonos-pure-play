@@ -24,6 +24,8 @@ const STEP_IDLE_TIMEOUTS_MS = {
   'candidate-click': Number(process.env.SONOS_STEP_TIMEOUT_CANDIDATE_CLICK_MS || 30000),
   'playback-action': Number(process.env.SONOS_STEP_TIMEOUT_PLAYBACK_ACTION_MS || 40000),
 };
+const WATCHDOG_GRACE_MS = Number(process.env.SONOS_RUN_WATCHDOG_GRACE_MS || 1500);
+const CHILD_KILL_GRACE_MS = Number(process.env.SONOS_RUN_CHILD_KILL_GRACE_MS || 3000);
 
 function appendRunRecord(entry) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -109,6 +111,56 @@ function sanitizePageState(pageState) {
   return sanitized;
 }
 
+function listDescendantPids(rootPid) {
+  if (!rootPid) return [];
+  let output = '';
+  try {
+    output = execFileSync('ps', ['-axo', 'pid=,ppid='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+    });
+  } catch {
+    return [];
+  }
+  const childrenByParent = new Map();
+  for (const line of output.split('\n')) {
+    const [pidRaw, ppidRaw] = line.trim().split(/\s+/);
+    const pid = Number(pidRaw);
+    const ppid = Number(ppidRaw);
+    if (!Number.isFinite(pid) || !Number.isFinite(ppid)) continue;
+    if (!childrenByParent.has(ppid)) childrenByParent.set(ppid, []);
+    childrenByParent.get(ppid).push(pid);
+  }
+  const descendants = [];
+  const queue = [Number(rootPid)];
+  while (queue.length) {
+    const parent = queue.shift();
+    for (const pid of childrenByParent.get(parent) || []) {
+      descendants.push(pid);
+      queue.push(pid);
+    }
+  }
+  return descendants;
+}
+
+function signalPids(pids, signal) {
+  for (const pid of [...new Set(pids)].filter(Boolean)) {
+    try { process.kill(pid, signal); } catch {}
+  }
+}
+
+function killChildTree(child, knownPids = []) {
+  const rootPid = child?.pid || null;
+  signalPids([rootPid, ...knownPids, ...listDescendantPids(rootPid)], 'SIGTERM');
+  setTimeout(() => {
+    const pids = [rootPid, ...knownPids, ...listDescendantPids(rootPid)].filter((pid) => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    });
+    signalPids(pids, 'SIGKILL');
+  }, CHILD_KILL_GRACE_MS);
+}
+
 async function main() {
   const [roomInput, ...requestParts] = process.argv.slice(2);
   const request = requestParts.join(' ').trim();
@@ -122,6 +174,7 @@ async function main() {
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const childPids = new Set([child.pid]);
 
   let buffer = '';
   let latestStep = null;
@@ -173,6 +226,8 @@ async function main() {
         }
         if (parsed?.targetId) latestTargetId = parsed.targetId;
         if (parsed?.verifyResult?.targetId) latestTargetId = parsed.verifyResult.targetId;
+        if (parsed?.pid) childPids.add(Number(parsed.pid));
+        if (parsed?.closeResidentResult?.pid) childPids.add(Number(parsed.closeResidentResult.pid));
         if (
           parsed?.phase ||
           parsed?.event ||
@@ -272,10 +327,7 @@ async function main() {
       });
     }
 
-    child.kill('SIGTERM');
-    setTimeout(() => {
-      if (!child.killed) child.kill('SIGKILL');
-    }, 3000);
+    killChildTree(child, [...childPids]);
   };
 
   const watchdog = setInterval(() => {
@@ -286,7 +338,10 @@ async function main() {
     if (!idleLimit || idleLimit <= 0) return;
     const idleForMs = now - lastProgressAt;
     const stepIdleForMs = now - latestStepStartedAt;
-    if (idleForMs >= idleLimit && stepIdleForMs >= idleLimit) {
+    const lastOutputWasSuccess = /"kind":"run-succeeded"|"kind":"run-failed"/.test(buffer)
+      || tail.some((entry) => /"kind":"run-succeeded"|"kind":"run-failed"/.test(entry));
+    if (lastOutputWasSuccess) return;
+    if (idleForMs >= idleLimit + WATCHDOG_GRACE_MS && stepIdleForMs >= idleLimit + WATCHDOG_GRACE_MS) {
       finalizeTimeout('supervised-idle-timeout', idleLimit);
     }
   }, 1000);
