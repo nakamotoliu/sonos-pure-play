@@ -59,30 +59,6 @@ test('now playing region naming the room is the strongest active-room signal', (
   assert.equal(state.reason, 'page-now-playing-room');
 });
 
-test('bottom now-playing text naming target room confirms active room even when system card has set-active button', () => {
-  const state = classifyRoomActiveState({
-    room: '客厅 play5',
-    text: '将客厅 play5设置为有效 客厅 play5 Alone at the Beach 输出选择器 暂停群组客厅 play5',
-    labels: ['将客厅 play5设置为有效', '输出选择器', '暂停群组客厅 play5'],
-    nowPlayingText: '正在播放 客厅 play5 Alone at the Beach QQ音乐 Rafael Manso SQ',
-  });
-
-  assert.equal(state.activeRoomConfirmed, true);
-  assert.equal(state.reason, 'page-now-playing-room');
-});
-
-test('aria snapshot now-playing region naming target room confirms active room', () => {
-  const state = classifyRoomActiveState({
-    room: '客厅 play5',
-    text: '将客厅 play5设置为有效 客厅 play5 cloudy 输出选择器 暂停群组客厅 play5',
-    labels: ['将客厅 play5设置为有效', '输出选择器', '暂停群组客厅 play5'],
-    nowPlayingText: 'region "正在播放" button "查看播放列表" generic: 客厅 play5 generic: cloudy, with a chance of loneliness',
-  });
-
-  assert.equal(state.activeRoomConfirmed, true);
-  assert.equal(state.reason, 'page-now-playing-room');
-});
-
 test('whole system list with multiple room controls is not a valid active-room card', () => {
   const state = classifyRoomActiveState({
     room: '客厅 play5',

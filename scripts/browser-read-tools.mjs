@@ -315,15 +315,10 @@ export function readRoomSyncState(runner, targetId, room) {
       const roomCardButtons = best?.labels || [];
       const roomCardText = best?.text ? best.text.slice(0, 320) : null;
       const fallbackText = normalize((systemRoot || document.querySelector('main') || document.body)?.innerText || '');
-      const allVisibleText = normalize(document.body?.innerText || '');
       const nowPlayingSection = [...document.querySelectorAll('[role="region"],section,div')]
         .filter(visible)
         .find((el) => normalize(el.getAttribute('aria-label') || '') === '正在播放' || normalize(el.textContent || '').startsWith('正在播放'));
-      let nowPlayingText = normalize(nowPlayingSection?.innerText || nowPlayingSection?.textContent || '');
-      if (!nowPlayingText) {
-        const markerIndex = allVisibleText.indexOf('正在播放');
-        if (markerIndex >= 0) nowPlayingText = allVisibleText.slice(markerIndex, markerIndex + 420);
-      }
+      const nowPlayingText = normalize(nowPlayingSection?.innerText || nowPlayingSection?.textContent || '');
 
       return {
         targetRoom,
@@ -347,32 +342,12 @@ export function readRoomSyncState(runner, targetId, room) {
     }`
   );
   const state = result?.result || result || { targetRoom: room, activeRoomConfirmed: false };
-  let activeStateInput = state.activeStateInput || {
+  const activeState = classifyRoomActiveState(state.activeStateInput || {
     room: state.targetRoom || room,
     labels: state.roomCardButtons || [],
     text: state.roomCardText || '',
     nowPlayingText: state.pageNowPlayingText || '',
-  };
-  if (!activeStateInput.nowPlayingText) {
-    try {
-      const ai = snapshotAi(runner, targetId, 360);
-      const aiText = typeof ai?.snapshot === 'string'
-        ? ai.snapshot
-        : typeof ai?.value?.snapshot === 'string'
-          ? ai.value.snapshot
-          : typeof ai === 'string'
-            ? ai
-            : '';
-      const markerIndex = aiText.indexOf('region "正在播放"');
-      if (markerIndex >= 0) {
-        activeStateInput = {
-          ...activeStateInput,
-          nowPlayingText: aiText.slice(markerIndex, markerIndex + 1800),
-        };
-      }
-    } catch {}
-  }
-  const activeState = classifyRoomActiveState(activeStateInput);
+  });
   return {
     ...state,
     activeControls: activeState.activeControls,

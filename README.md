@@ -349,18 +349,16 @@ This section is required by SOP. Every privacy/code-review update should append 
 - Changed:
   - allow the initial room-sync read to continue when the selected Sonos Web page does not currently expose the room card, while still failing closed for login/challenge states
   - require the final room-sync read after activation to confirm the target room is active; a merely visible room card is not enough to proceed
-  - add a read-only fallback that uses the Sonos Web bottom `正在播放` / ARIA snapshot region to confirm the target active room when DOM section lookup misses it
   - detect copyright/unavailable markers on a selected detail page before playback-menu handling and retry the next candidate instead of waiting for supervisor timeout
 - Added:
   - retry-policy unit coverage for browser-surface copyright-blocked candidates
   - room-sync policy coverage proving final progression requires active-room confirmation
-  - active-room coverage for bottom/ARIA `正在播放` evidence naming the target room
 - Impact:
   - old detail pages without an open system/room panel no longer abort before the activation attempt
-  - playback/search still cannot proceed unless Sonos Web confirms the requested room is active after activation or bottom/ARIA now-playing evidence names the target room
+  - playback/search still cannot proceed unless Sonos Web confirms the requested room is active after activation
   - copyright-heavy playlists fail over faster to another candidate
 - Validation:
-  - `node --test scripts/*.test.mjs` passed 38/38
+  - `node --test scripts/*.test.mjs` passed 36/36
   - `GatewayBrowserClient.tabs()` succeeded
 
 ### 2026-04-29
