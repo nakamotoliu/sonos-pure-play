@@ -38,15 +38,13 @@ async function loadRuntime() {
       newestDistFile(/^call-[A-Za-z0-9_-]+\.js$/),
     ]),
     importFirst([
-      path.join(OPENCLAW_DIST_DIR, 'message-channel-C2Lnao8s.js'),
-      ...fs.readdirSync(OPENCLAW_DIST_DIR)
-        .filter((file) => /^message-channel-[A-Za-z0-9_-]+\.js$/.test(file) && !/^message-channel-core-/.test(file))
-        .map((file) => path.join(OPENCLAW_DIST_DIR, file)),
+      path.join(OPENCLAW_DIST_DIR, 'client-info-BEG7EJkV.js'),
+      newestDistFile(/^client-info-[A-Za-z0-9_-]+\.js$/),
     ]),
-  ]).then(([callModule, channelModule]) => {
-    const callGateway = callModule.callGateway || callModule.r;
-    const clientNames = callModule.GATEWAY_CLIENT_NAMES || channelModule.GATEWAY_CLIENT_NAMES || channelModule.g;
-    const clientModes = callModule.GATEWAY_CLIENT_MODES || channelModule.GATEWAY_CLIENT_MODES || channelModule.h;
+  ]).then(([callModule, clientInfoModule]) => {
+    const callGateway = callModule.callGateway || callModule.i || callModule.r;
+    const clientNames = clientInfoModule.GATEWAY_CLIENT_NAMES || clientInfoModule.i || clientInfoModule.n;
+    const clientModes = clientInfoModule.GATEWAY_CLIENT_MODES || clientInfoModule.r;
     if (!callGateway || !clientNames?.CLI || !clientModes?.CLI) {
       throw new Error('OpenClaw gateway runtime exports not found');
     }

@@ -332,6 +332,18 @@ Local runtime artifacts:
 This section is required by SOP. Every privacy/code-review update should append the specific change set here.
 
 
+### 2026-05-01
+- Tracking: OpenClaw 2026.4.29 browser-runtime compatibility fix before public push
+- Changed:
+  - load gateway client constants from the current `client-info-*` runtime module instead of the older message-channel bundle
+  - keep hashed `call-*` module discovery for OpenClaw gateway RPC calls
+- Impact:
+  - Sonos browser smoke tests work again after OpenClaw runtime chunk/export changes
+  - no credential, token, cookie, or operator-specific setup details added
+- Validation:
+  - `node --test scripts/*.test.mjs` passed 32/32
+  - `GatewayBrowserClient.tabs()` and `openclaw browser --browser-profile openclaw-headless tabs` succeeded
+
 ### 2026-04-29
 - Tracking: login-preflight and privacy-compliance update before public push
 - Changed:
