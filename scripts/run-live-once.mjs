@@ -404,7 +404,7 @@ try {
       targetId,
       context: { room },
       action: () => runner.readRoomSyncState(targetId, room),
-      verify: (result) => ({ ok: Boolean(result?.activeRoomConfirmed || result?.roomCardFound), result }),
+      verify: (result) => ({ ok: Boolean(result?.activeRoomConfirmed), result }),
     }).actionResult;
   } else {
     emit({ phase: 'room-sync-after-skipped', reason: 'already-active', room });
