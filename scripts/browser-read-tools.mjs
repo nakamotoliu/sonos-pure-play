@@ -199,6 +199,15 @@ export function readRoomSyncState(runner, targetId, room) {
       const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
       const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
       const textOf = (el) => normalize(el?.getAttribute('aria-label') || el?.textContent || '');
+      const isSelected = (el) => el?.getAttribute?.('aria-selected') === 'true'
+        || el?.getAttribute?.('data-selected') === 'true'
+        || el?.getAttribute?.('data-active') === 'true'
+        || el?.getAttribute?.('aria-current') === 'true'
+        || el?.getAttribute?.('aria-current') === 'page'
+        || /(^|\s)(selected|active|is-selected|isActive)(\s|$)/.test(String(el?.className || ''));
+      const isPressed = (el) => el?.getAttribute?.('aria-pressed') === 'true'
+        || el?.getAttribute?.('data-pressed') === 'true'
+        || /(^|\s)(pressed|is-pressed)(\s|$)/.test(String(el?.className || ''));
       const interactiveSelector = 'button,[role="button"],a,[role="link"]';
       const roomSignalPattern = /设置为有效|播放群组|暂停群组|输出选择器/;
       const systemViewTokens = ['系统视图', '您的系统', 'your system', 'system view'];
@@ -206,6 +215,7 @@ export function readRoomSyncState(runner, targetId, room) {
         ? [...root.querySelectorAll(interactiveSelector)].filter(visible)
         : [];
       const labelsOf = (root) => controlsOf(root).map((el) => textOf(el)).filter(Boolean);
+      const pressedLabelsOf = (root) => controlsOf(root).filter(isPressed).map((el) => textOf(el)).filter(Boolean);
       const scoreSystemRoot = (root) => {
         const name = normalize(root?.getAttribute?.('aria-label') || root?.getAttribute?.('data-testid') || '');
         const buttons = labelsOf(root);
@@ -251,6 +261,8 @@ export function readRoomSyncState(runner, targetId, room) {
         const text = textOf(card);
         const rect = card.getBoundingClientRect();
         const mixedRoomCard = isMixedRoomCard(labels);
+        const pressedLabels = pressedLabelsOf(card);
+        const selected = isSelected(card) || controlsOf(card).some(isSelected);
         let score = 0;
         if (text.includes(targetRoom)) score += 20;
         if (labels.includes(exactActivateLabel)) score += 25;
@@ -265,6 +277,8 @@ export function readRoomSyncState(runner, targetId, room) {
           rect,
           score,
           mixedRoomCard,
+          pressedLabels,
+          selected,
         };
       };
 
@@ -314,6 +328,8 @@ export function readRoomSyncState(runner, targetId, room) {
       const best = cardCandidates[0] || null;
       const roomCardButtons = best?.labels || [];
       const roomCardText = best?.text ? best.text.slice(0, 320) : null;
+      const roomCardPressedLabels = best?.pressedLabels || [];
+      const roomCardSelected = Boolean(best?.selected);
       const fallbackText = normalize((systemRoot || document.querySelector('main') || document.body)?.innerText || '');
       const nowPlayingSection = [...document.querySelectorAll('[role="region"],section,div')]
         .filter(visible)
@@ -333,7 +349,9 @@ export function readRoomSyncState(runner, targetId, room) {
           : null,
         roomCardText,
         roomCardButtons: roomCardButtons.slice(0, 20),
-        activeStateInput: { room: targetRoom, labels: roomCardButtons, text: roomCardText || '', nowPlayingText },
+        roomCardPressedLabels: roomCardPressedLabels.slice(0, 20),
+        roomCardSelected,
+        activeStateInput: { room: targetRoom, labels: roomCardButtons, text: roomCardText || '', nowPlayingText, selected: roomCardSelected, pressedLabels: roomCardPressedLabels },
         pageNowPlayingText: nowPlayingText.slice(0, 320),
         url: location.href,
         title: document.title || '',
@@ -347,6 +365,8 @@ export function readRoomSyncState(runner, targetId, room) {
     labels: state.roomCardButtons || [],
     text: state.roomCardText || '',
     nowPlayingText: state.pageNowPlayingText || '',
+    selected: state.roomCardSelected || false,
+    pressedLabels: state.roomCardPressedLabels || [],
   });
   return {
     ...state,

@@ -23,13 +23,16 @@ export function labelsMentioningOtherRooms(labels = [], room) {
     .filter((label) => !label.includes(targetRoom));
 }
 
-export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayingText = '' } = {}) {
+export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayingText = '', selected = false, pressedLabels = [] } = {}) {
   const roomLabels = buildRoomLabels(room);
   const normalizedLabels = (Array.isArray(labels) ? labels : [])
     .map(normalizeRoomText)
     .filter(Boolean);
   const normalizedText = normalizeRoomText(text);
   const normalizedNowPlayingText = normalizeRoomText(nowPlayingText);
+  const normalizedPressedLabels = (Array.isArray(pressedLabels) ? pressedLabels : [])
+    .map(normalizeRoomText)
+    .filter(Boolean);
   const otherRoomControls = labelsMentioningOtherRooms(normalizedLabels, roomLabels.targetRoom);
 
   const hasActivate = normalizedLabels.includes(roomLabels.activateLabel);
@@ -40,15 +43,22 @@ export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayi
     || normalizedLabels.some((label) => label.includes(roomLabels.targetRoom));
   const mixedRoomCard = otherRoomControls.length > 0;
   const nowPlayingMatchesRoom = normalizedNowPlayingText.includes(roomLabels.targetRoom);
+  const hasPressedGroupControl = normalizedPressedLabels.includes(roomLabels.playGroupLabel)
+    || normalizedPressedLabels.includes(roomLabels.pauseGroupLabel);
 
-  // Sonos Web active output is a page-only concept. The strongest signal is the
-  // persistent “正在播放” area naming the target room. System-list controls can
-  // coexist with active playback and are only secondary signals.
-  const activeRoomConfirmed = nowPlayingMatchesRoom || (
+  // Sonos Web active output is a side-bar/system-view concept. Bottom
+  // “正在播放” can prove sound is coming from a room, but it must not select
+  // the browser operation target. Only the side-bar room card state can confirm
+  // the active room.
+  const activeRoomConfirmed = Boolean(
     mentionsRoom
     && !mixedRoomCard
     && !hasActivate
-    && (hasOutputSelector || hasPlayGroup || hasPauseGroup)
+    && (
+      selected
+      || hasPressedGroupControl
+      || (!hasOutputSelector && (hasPlayGroup || hasPauseGroup))
+    )
   );
 
   return {
@@ -62,13 +72,15 @@ export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayi
     mixedRoomCard,
     otherRoomControls,
     nowPlayingMatchesRoom,
+    selected,
+    hasPressedGroupControl,
     activeControls: normalizedLabels.filter((label) => (
       label === roomLabels.outputSelectorLabel
       || label === roomLabels.playGroupLabel
       || label === roomLabels.pauseGroupLabel
     )),
     reason: activeRoomConfirmed
-      ? (nowPlayingMatchesRoom ? 'page-now-playing-room' : 'page-active-room-controls')
+      ? (selected ? 'sidebar-selected-room-card' : hasPressedGroupControl ? 'sidebar-pressed-room-control' : 'sidebar-active-room-controls')
       : mixedRoomCard
         ? 'mixed-room-card-not-valid'
         : hasActivate
