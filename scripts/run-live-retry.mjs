@@ -46,6 +46,7 @@ export function buildCandidateAttemptPool(surface, { maxCandidates = DEFAULT_MAX
 export function shouldRetryWithNextCandidate(error) {
   if (!error) return false;
   if (isRetryablePlaybackVerificationFailure(error)) return true;
+  if (error?.data?.retryable && String(error?.data?.retryReason || '').includes('copyright')) return true;
 
   const code = String(error?.code || '');
   const step = String(error?.data?.step || '');

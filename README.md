@@ -344,6 +344,20 @@ This section is required by SOP. Every privacy/code-review update should append 
   - `node --test scripts/*.test.mjs` passed 32/32
   - `GatewayBrowserClient.tabs()` and `openclaw browser --browser-profile openclaw-headless tabs` succeeded
 
+### 2026-05-01
+- Tracking: harden the weekday wakeup run after transient `room-sync-read-before` and copyright-unavailable stalls
+- Changed:
+  - allow the initial room-sync read to continue when the selected Sonos Web page does not currently expose the room card, while still failing closed for login/challenge states
+  - detect copyright/unavailable markers on a selected detail page before playback-menu handling and retry the next candidate instead of waiting for supervisor timeout
+- Added:
+  - retry-policy unit coverage for browser-surface copyright-blocked candidates
+- Impact:
+  - old detail pages without an open system/room panel no longer abort an otherwise valid CLI-confirmed run
+  - copyright-heavy playlists fail over faster to another candidate
+- Validation:
+  - `node --test scripts/*.test.mjs` passed 33/33
+  - `GatewayBrowserClient.tabs()` succeeded
+
 ### 2026-04-29
 - Tracking: login-preflight and privacy-compliance update before public push
 - Changed:

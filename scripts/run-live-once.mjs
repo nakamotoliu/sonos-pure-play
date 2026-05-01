@@ -209,6 +209,7 @@ function waitForPlaybackSurfaceReady(runner, targetId, { timeoutMs = 10000, inte
     `async () => {
       const timeoutMs = ${Number(timeoutMs)};
       const intervalMs = ${Number(intervalMs)};
+      const unavailablePatterns = [/应版权方要求暂不能播放/, /版权方要求暂不能播放/, /暂不能播放/, /无法播放/, /unavailable/i, /not available/i, /copyright/i];
       const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
       const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
       const textOf = (el) => normalize(el?.getAttribute?.('aria-label') || el?.textContent || '');
@@ -226,14 +227,16 @@ function waitForPlaybackSurfaceReady(runner, targetId, { timeoutMs = 10000, inte
           .map((el) => textOf(el))
           .filter(Boolean);
         const text = normalize(main?.innerText || document.body?.innerText || '');
+        const copyrightBlocked = unavailablePatterns.some((pattern) => pattern.test(text));
         state = {
           ok: buttons.includes('更多选项') || buttons.some((label) => /^随机播放/.test(label)),
+          copyrightBlocked,
           url: location.href,
           headings: headings.slice(0, 12),
           buttons: buttons.slice(0, 60),
           bodyPreview: text.slice(0, 240),
         };
-        if (state.ok) break;
+        if (state.ok || state.copyrightBlocked) break;
         await sleep(intervalMs);
       }
       return state;
@@ -379,7 +382,11 @@ try {
           { profile: runner.profile, url: result?.url || null, result }
         );
       }
-      return { ok: Boolean(result?.ok === false ? false : (result?.roomVisible || result?.roomCardFound)), result };
+      return {
+        ok: Boolean(result?.ok === false ? false : true),
+        result,
+        warning: result?.roomVisible || result?.roomCardFound ? null : 'room-not-visible-on-current-page',
+      };
     },
   }).actionResult;
   emit({ phase: 'room-sync-before', roomSync });
@@ -476,7 +483,17 @@ try {
             targetId,
             context: { query, title: chosenCandidate?.title || null },
             action: () => waitForPlaybackSurfaceReady(runner, targetId),
-            verify: (result) => ({ ok: Boolean(result?.ok), result }),
+            verify: (result) => {
+              if (result?.copyrightBlocked) {
+                throw new SkillError(
+                  'browser-action',
+                  'PLAYBACK_SURFACE_COPYRIGHT_BLOCKED',
+                  'The selected Sonos detail page contains copyright/unavailable markers before playback.',
+                  { targetId, query, chosenCandidate, result, retryable: true, retryReason: 'copyright-unavailable-surface' }
+                );
+              }
+              return { ok: Boolean(result?.ok), result };
+            },
           }).actionResult;
           emit({ phase: 'playback-surface-ready', query, playbackSurfaceReady, chosenCandidate });
 
