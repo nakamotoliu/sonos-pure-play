@@ -396,7 +396,11 @@ try {
       targetId,
       context: { room },
       action: () => runner.clickRoomActivate(targetId, room),
-      verify: (result) => ({ ok: Boolean(result?.ok), result }),
+      verify: (result) => ({
+        ok: result?.ok !== false,
+        result,
+        warning: result?.ok ? null : 'activation-action-not-confirmed-final-room-read-required',
+      }),
     }).actionResult;
     emit({ phase: 'room-sync-click', activate });
     runner.waitMs(200);
