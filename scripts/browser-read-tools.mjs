@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { buildReadLayeredPageStateFn } from './dom-layers.mjs';
 import { classifyRoomActiveState } from './room-active-detector.mjs';
 import { SONOS_IDENTITY_HOST, SONOS_LOGIN_HOST } from './selectors.mjs';
+import { getStatus } from './cli-control.mjs';
 
 export function evaluate(runner, targetId, fnSource) {
   const resident = runner.actBrowser?.({ kind: 'evaluate', targetId, fn: fnSource }, { timeoutMs: runner.browserCommandTimeoutMs || 90000 });
@@ -170,6 +171,12 @@ export function readRoomContext(runner, targetId) {
 }
 
 export function readRoomSyncState(runner, targetId, room) {
+  let cliStatus = null;
+  try {
+    cliStatus = getStatus(room);
+  } catch {
+    cliStatus = null;
+  }
   const pageState = readPageState(runner, targetId);
   const pageUrl = String(pageState?.url || '');
   if (pageState?.loginBlocked || pageState?.challengeRequired || pageUrl.includes(SONOS_LOGIN_HOST) || pageUrl.includes(SONOS_IDENTITY_HOST)) {
@@ -263,11 +270,23 @@ export function readRoomSyncState(runner, targetId, room) {
         const mixedRoomCard = isMixedRoomCard(labels);
         const pressedLabels = pressedLabelsOf(card);
         const selected = isSelected(card) || controlsOf(card).some(isSelected);
+        const hasActivate = labels.includes(exactActivateLabel);
+        const hasTargetGroup = labels.includes(playGroupLabel) || labels.includes(pauseGroupLabel);
+        const hasOutputSelector = labels.includes('输出选择器');
         let score = 0;
         if (text.includes(targetRoom)) score += 20;
-        if (labels.includes(exactActivateLabel)) score += 25;
-        if (labels.includes(playGroupLabel) || labels.includes(pauseGroupLabel)) score += 18;
-        if (labels.includes('输出选择器')) score += 10;
+        // The full-card “将<room>设置为有效” overlay is not a second room
+        // card. Room identity must come from the unique inner room card; the
+        // overlay is only an activation click target handled separately.
+        if (hasActivate) score -= 80;
+        if (hasTargetGroup) score += 18;
+        if (hasOutputSelector) score += 10;
+        // If Sonos Web does not expose “将<room>设置为有效” inside the
+        // specific room card, that card is already the active output. Prefer
+        // this inner card over an outer wrapper that contains the same room
+        // plus its hidden/overlay activate button. The outer wrapper was the
+        // source of false negatives during room sync.
+        if (text.includes(targetRoom) && hasTargetGroup && hasOutputSelector && !hasActivate) score += 40;
         if (/音量|静音/.test(text)) score += 4;
         if (mixedRoomCard) score -= 1000;
         return {
@@ -284,23 +303,26 @@ export function readRoomSyncState(runner, targetId, room) {
 
       const cardRootOf = (node) => {
         if (!node || !systemRoot) return null;
-        let best = null;
+        const candidates = [];
         for (let current = node; current && current !== systemRoot && current !== document.body; current = current.parentElement) {
           if (!visible(current)) continue;
           const text = textOf(current);
           if (!text.includes(targetRoom)) continue;
           const labels = labelsOf(current);
-          if (!labels.some((label) => label === exactActivateLabel || label === playGroupLabel || label === pauseGroupLabel || label === '输出选择器')) continue;
+          if (!labels.some((label) => label === playGroupLabel || label === pauseGroupLabel)) continue;
+          if (labels.includes(exactActivateLabel)) continue;
           if (isMixedRoomCard(labels)) continue;
-          best = current;
+          candidates.push(scoreCard(current));
         }
-        return best;
+        return candidates
+          .sort((a, b) => b.score - a.score || (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height))[0]
+          ?.card || null;
       };
 
       const anchorNodes = systemRoot
         ? controlsOf(systemRoot).filter((el) => {
             const label = textOf(el);
-            return label === exactActivateLabel || label === playGroupLabel || label === pauseGroupLabel || label.includes(targetRoom);
+            return label === playGroupLabel || label === pauseGroupLabel;
           })
         : [];
 
@@ -317,7 +339,8 @@ export function readRoomSyncState(runner, targetId, room) {
             if (!text.includes(targetRoom)) return false;
             const labels = labelsOf(el);
             if (isMixedRoomCard(labels)) return false;
-            return labels.some((label) => label === exactActivateLabel || label === playGroupLabel || label === pauseGroupLabel || label === '输出选择器');
+            if (labels.includes(exactActivateLabel)) return false;
+            return labels.some((label) => label === playGroupLabel || label === pauseGroupLabel);
           })
           .map(scoreCard)
           .filter((entry) => !entry.mixedRoomCard)
@@ -326,7 +349,25 @@ export function readRoomSyncState(runner, targetId, room) {
       }
 
       const best = cardCandidates[0] || null;
-      const roomCardButtons = best?.labels || [];
+      const overlapsRoomCard = (rect) => {
+        if (!best?.rect || !rect) return false;
+        const left = Math.max(best.rect.left, rect.left);
+        const right = Math.min(best.rect.right, rect.right);
+        const top = Math.max(best.rect.top, rect.top);
+        const bottom = Math.min(best.rect.bottom, rect.bottom);
+        const overlapArea = Math.max(0, right - left) * Math.max(0, bottom - top);
+        const rectArea = Math.max(1, rect.width * rect.height);
+        return overlapArea / rectArea > 0.6;
+      };
+      const roomCardButtons = best
+        ? [...new Set([
+            ...best.labels,
+            ...controlsOf(systemRoot)
+              .filter((el) => overlapsRoomCard(el.getBoundingClientRect()))
+              .map((el) => textOf(el))
+              .filter((label) => label === exactActivateLabel || label === playGroupLabel || label === pauseGroupLabel || label === '输出选择器' || label === '静音'),
+          ])]
+        : [];
       const roomCardText = best?.text ? best.text.slice(0, 320) : null;
       const roomCardPressedLabels = best?.pressedLabels || [];
       const roomCardSelected = Boolean(best?.selected);
@@ -351,7 +392,7 @@ export function readRoomSyncState(runner, targetId, room) {
         roomCardButtons: roomCardButtons.slice(0, 20),
         roomCardPressedLabels: roomCardPressedLabels.slice(0, 20),
         roomCardSelected,
-        activeStateInput: { room: targetRoom, labels: roomCardButtons, text: roomCardText || '', nowPlayingText, selected: roomCardSelected, pressedLabels: roomCardPressedLabels },
+        activeStateInput: { room: targetRoom, labels: roomCardButtons, text: roomCardText || '', nowPlayingText, selected: roomCardSelected, pressedLabels: roomCardPressedLabels, cliState: ${JSON.stringify(cliStatus?.state || '')} },
         pageNowPlayingText: nowPlayingText.slice(0, 320),
         url: location.href,
         title: document.title || '',
@@ -367,9 +408,12 @@ export function readRoomSyncState(runner, targetId, room) {
     nowPlayingText: state.pageNowPlayingText || '',
     selected: state.roomCardSelected || false,
     pressedLabels: state.roomCardPressedLabels || [],
+    cliState: cliStatus?.state || '',
   });
   return {
     ...state,
+    cliPlaybackState: cliStatus?.state || null,
+    cliPlaybackTitle: cliStatus?.title || null,
     activeControls: activeState.activeControls,
     activeRoomConfirmed: activeState.activeRoomConfirmed,
     activeRoomReason: activeState.reason,

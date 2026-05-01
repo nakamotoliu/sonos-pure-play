@@ -23,7 +23,7 @@ export function labelsMentioningOtherRooms(labels = [], room) {
     .filter((label) => !label.includes(targetRoom));
 }
 
-export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayingText = '', selected = false, pressedLabels = [] } = {}) {
+export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayingText = '', selected = false, pressedLabels = [], cliState = '' } = {}) {
   const roomLabels = buildRoomLabels(room);
   const normalizedLabels = (Array.isArray(labels) ? labels : [])
     .map(normalizeRoomText)
@@ -33,6 +33,7 @@ export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayi
   const normalizedPressedLabels = (Array.isArray(pressedLabels) ? pressedLabels : [])
     .map(normalizeRoomText)
     .filter(Boolean);
+  const normalizedCliState = normalizeRoomText(cliState).toUpperCase();
   const otherRoomControls = labelsMentioningOtherRooms(normalizedLabels, roomLabels.targetRoom);
 
   const hasActivate = normalizedLabels.includes(roomLabels.activateLabel);
@@ -45,14 +46,17 @@ export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayi
   const nowPlayingMatchesRoom = normalizedNowPlayingText.includes(roomLabels.targetRoom);
   const hasPressedGroupControl = normalizedPressedLabels.includes(roomLabels.playGroupLabel)
     || normalizedPressedLabels.includes(roomLabels.pauseGroupLabel);
+  const cliStopped = normalizedCliState === 'STOPPED';
 
   // Sonos Web active output is a side-bar/system-view concept. Bottom
   // “正在播放” can prove sound is coming from a room, but it must not select
   // the browser operation target. Only the side-bar room card state can confirm
-  // the active room.
+  // the active room. CLI STOPPED is a veto: a stopped target must not be treated
+  // as active just because the sidebar still shows controls for that room.
   const activeRoomConfirmed = Boolean(
     mentionsRoom
     && !mixedRoomCard
+    && !cliStopped
     && !hasActivate
     && (
       selected
@@ -74,6 +78,7 @@ export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayi
     nowPlayingMatchesRoom,
     selected,
     hasPressedGroupControl,
+    cliStopped,
     activeControls: normalizedLabels.filter((label) => (
       label === roomLabels.outputSelectorLabel
       || label === roomLabels.playGroupLabel
@@ -83,8 +88,10 @@ export function classifyRoomActiveState({ room, labels = [], text = '', nowPlayi
       ? (selected ? 'sidebar-selected-room-card' : hasPressedGroupControl ? 'sidebar-pressed-room-control' : 'sidebar-active-room-controls')
       : mixedRoomCard
         ? 'mixed-room-card-not-valid'
-        : hasActivate
-          ? 'page-offers-set-active'
-          : 'page-active-room-not-confirmed',
+        : cliStopped
+          ? 'cli-room-stopped'
+          : hasActivate
+            ? 'page-offers-set-active'
+            : 'page-active-room-not-confirmed',
   };
 }

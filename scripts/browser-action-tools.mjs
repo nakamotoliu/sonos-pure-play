@@ -141,33 +141,42 @@ export function clickRoomActivate(runner, targetId, room) {
         const text = textOf(card);
         const rect = card.getBoundingClientRect();
         const mixedRoomCard = isMixedRoomCard(labels);
+        const hasActivate = labels.includes(exactActivateLabel);
+        const hasTargetGroup = labels.includes(playGroupLabel) || labels.includes(pauseGroupLabel);
+        const hasOutputSelector = labels.includes('输出选择器');
         let score = 0;
         if (text.includes(targetRoom)) score += 20;
-        if (labels.includes(exactActivateLabel)) score += 25;
-        if (labels.includes(playGroupLabel) || labels.includes(pauseGroupLabel)) score += 18;
-        if (labels.includes('输出选择器')) score += 10;
+        // The full-card activation overlay belongs to the same room card; it
+        // must not be selected as a second/outer card for state decisions.
+        if (hasActivate) score -= 80;
+        if (hasTargetGroup) score += 18;
+        if (hasOutputSelector) score += 10;
+        if (text.includes(targetRoom) && hasTargetGroup && hasOutputSelector && !hasActivate) score += 40;
         if (mixedRoomCard) score -= 1000;
         return { card, labels, text, rect, score, mixedRoomCard };
       };
 
       const cardRootOf = (node) => {
         if (!node) return null;
-        let best = null;
+        const candidates = [];
         for (let current = node; current && current !== systemRoot && current !== document.body; current = current.parentElement) {
           if (!visible(current)) continue;
           const text = textOf(current);
           if (!text.includes(targetRoom)) continue;
           const labels = labelsOf(current);
-          if (!labels.some((label) => label === exactActivateLabel || label === playGroupLabel || label === pauseGroupLabel || label === '输出选择器')) continue;
+          if (!labels.some((label) => label === playGroupLabel || label === pauseGroupLabel)) continue;
+          if (labels.includes(exactActivateLabel)) continue;
           if (isMixedRoomCard(labels)) continue;
-          best = current;
+          candidates.push(scoreCard(current));
         }
-        return best;
+        return candidates
+          .sort((a, b) => b.score - a.score || (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height))[0]
+          ?.card || null;
       };
 
       const anchorControls = controlsOf(systemRoot).filter((el) => {
         const label = textOf(el);
-        return label === exactActivateLabel || label === playGroupLabel || label === pauseGroupLabel || label.includes(targetRoom);
+        return label === playGroupLabel || label === pauseGroupLabel;
       });
       let candidateCards = [...new Set(anchorControls.map((el) => cardRootOf(el)).filter(Boolean))]
         .map(scoreCard)
@@ -182,7 +191,8 @@ export function clickRoomActivate(runner, targetId, room) {
             if (!text.includes(targetRoom)) return false;
             const labels = labelsOf(el);
             if (isMixedRoomCard(labels)) return false;
-            return labels.some((label) => label === exactActivateLabel || label === playGroupLabel || label === pauseGroupLabel || label === '输出选择器');
+            if (labels.includes(exactActivateLabel)) return false;
+            return labels.some((label) => label === playGroupLabel || label === pauseGroupLabel);
           })
           .map(scoreCard)
           .filter((entry) => !entry.mixedRoomCard)
