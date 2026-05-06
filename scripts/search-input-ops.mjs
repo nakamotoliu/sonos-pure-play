@@ -19,16 +19,30 @@ function runTimedStage(runner, targetId, stage, meta, fn) {
     stage,
     ...meta,
   });
-  const result = fn();
-  emitRunnerEvent(runner, {
-    event: 'query-gate-substage-finished',
-    targetId,
-    stage,
-    durationMs: nowMs() - startedAt,
-    ok: true,
-    ...meta,
-  });
-  return result;
+  try {
+    const result = fn();
+    emitRunnerEvent(runner, {
+      event: 'query-gate-substage-finished',
+      targetId,
+      stage,
+      durationMs: nowMs() - startedAt,
+      ok: true,
+      ...meta,
+    });
+    return result;
+  } catch (error) {
+    emitRunnerEvent(runner, {
+      event: 'query-gate-substage-finished',
+      targetId,
+      stage,
+      durationMs: nowMs() - startedAt,
+      ok: false,
+      code: error?.code || null,
+      message: String(error?.message || error).slice(0, 500),
+      ...meta,
+    });
+    throw error;
+  }
 }
 
 function buildWriteSearchValueFn(query, requestedLabel = '搜索') {

@@ -1,6 +1,7 @@
 import { normalizeText, normalizeWhitespace } from './normalize.mjs';
 
 const EXCLUDED_SECTION_PATTERN = /搜索记录|您的服务|系统视图/i;
+const SONOS_RADIO_PATTERN = /\bsonos\s*radio\b|sonos\s*电台/i;
 const TYPE_PATTERNS = {
   playlist: /(播放列表|歌单|playlist|精选|合集|热歌|热门精选)/i,
   album: /(专辑|album)/i,
@@ -50,6 +51,17 @@ function countMatches(values, pattern) {
 
 function unique(items = []) {
   return [...new Set(items.filter(Boolean))];
+}
+
+function isSonosRadioCandidate(candidate = {}) {
+  const haystack = normalizeWhitespace([
+    candidate.title,
+    candidate.playLabel,
+    candidate.scopeText,
+    candidate.sectionLabel,
+    candidate.service,
+  ].filter(Boolean).join(' '));
+  return SONOS_RADIO_PATTERN.test(haystack);
 }
 
 export function shouldUseAriaSnapshotFallback(error) {
@@ -149,6 +161,7 @@ export function analyzeAriaSnapshot(snapshotOrNodes = [], options = {}) {
   const candidates = unique(candidatePool.map((entry) => `${entry.title}::${entry.playLabel}`))
     .map((key) => candidatePool.find((entry) => `${entry.title}::${entry.playLabel}` === key))
     .filter(Boolean)
+    .filter((entry) => !isSonosRadioCandidate(entry))
     .slice(0, 40);
 
   const searchInputs = entries

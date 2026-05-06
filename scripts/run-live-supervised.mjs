@@ -13,6 +13,7 @@ const PROFILE = process.env.OPENCLAW_BROWSER_PROFILE || 'openclaw-headless';
 const IDLE_TIMEOUT_MS = Number(process.env.SONOS_RUN_IDLE_TIMEOUT_MS || 0);
 const HARD_TIMEOUT_MS = Number(process.env.SONOS_RUN_HARD_TIMEOUT_MS || 600000);
 const STEP_IDLE_TIMEOUT_MS = Number(process.env.SONOS_RUN_STEP_IDLE_TIMEOUT_MS || 0);
+const WATCHDOG_MIN_STARTUP_MS = Number(process.env.SONOS_RUN_WATCHDOG_MIN_STARTUP_MS || 180000);
 const STEP_IDLE_TIMEOUTS_MS = {
   'ensure-sonos-tab': Number(process.env.SONOS_STEP_TIMEOUT_ENSURE_TAB_MS || 60000),
   'room-sync-read-before': Number(process.env.SONOS_STEP_TIMEOUT_ROOM_SYNC_MS || 20000),
@@ -50,6 +51,28 @@ function redactSensitiveText(value) {
     .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[redacted-ip]')
     .replace(/("(?:sonosId|luid|auid|salesforceContactId|salesforceAccountId|email|ip)"\s*:\s*")([^"]+)(")/gi, '$1[redacted]$3')
     .replace(/("accessTokenStatus"\s*:\s*)\{[^{}]*\}/gi, '$1"[redacted]"');
+}
+
+
+function summarizeLogLineForTail(line) {
+  const redacted = redactSensitiveText(line);
+  try {
+    const parsed = JSON.parse(redacted);
+    const compact = {
+      ts: parsed.ts,
+      phase: parsed.phase,
+      event: parsed.event,
+      step: parsed.step,
+      targetId: parsed.targetId,
+      query: parsed.query,
+      code: parsed.code,
+      ok: parsed.ok,
+      message: parsed.message ? String(parsed.message).slice(0, 240) : undefined,
+    };
+    return JSON.stringify(Object.fromEntries(Object.entries(compact).filter(([, value]) => typeof value !== 'undefined')));
+  } catch {
+    return redacted.slice(0, 1200);
+  }
 }
 
 function redactSensitiveValue(value) {
@@ -179,8 +202,9 @@ async function main() {
   let buffer = '';
   let latestStep = null;
   let latestTargetId = null;
-  let lastProgressAt = Date.now();
-  let latestStepStartedAt = Date.now();
+  const runStartedAt = Date.now();
+  let lastProgressAt = runStartedAt;
+  let latestStepStartedAt = runStartedAt;
   let latestEnsureStage = null;
   let latestEnsureStageStartedAt = null;
   const tail = [];
@@ -198,31 +222,40 @@ async function main() {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      tail.push(redactSensitiveText(trimmed));
+      tail.push(summarizeLogLineForTail(trimmed));
       if (tail.length > 40) tail.shift();
       try {
         const parsed = JSON.parse(trimmed);
+        if (parsed?.phase && parsed?.phase !== 'browser-runner') {
+          latestStepStartedAt = Date.now();
+        }
         if (parsed?.phase === 'browser-runner' && parsed?.event === 'step-start') {
           latestStep = parsed.step || latestStep;
           latestStepStartedAt = Date.now();
+          markProgress();
         }
         if (parsed?.phase === 'browser-runner' && parsed?.event === 'step-ok') {
           latestStepStartedAt = Date.now();
-          latestStep = null;
+          latestStep = latestStep === parsed.step ? null : latestStep;
+          markProgress();
         }
         if (parsed?.phase === 'browser-runner' && parsed?.event === 'step-failed') {
           latestStepStartedAt = Date.now();
-          latestStep = null;
+          latestStep = latestStep === parsed.step ? null : latestStep;
+          markProgress();
         }
         if (parsed?.phase === 'browser-runner' && parsed?.event === 'ensure-sonos-tab-stage-start') {
           latestEnsureStage = parsed.stage || latestEnsureStage;
           latestEnsureStageStartedAt = Date.now();
+          markProgress();
         }
         if (
           parsed?.phase === 'browser-runner'
           && (parsed?.event === 'ensure-sonos-tab-stage-ok' || parsed?.event === 'ensure-sonos-tab-stage-failed')
         ) {
           latestEnsureStageStartedAt = Date.now();
+          latestEnsureStage = null;
+          markProgress();
         }
         if (parsed?.targetId) latestTargetId = parsed.targetId;
         if (parsed?.verifyResult?.targetId) latestTargetId = parsed.verifyResult.targetId;
@@ -281,7 +314,7 @@ async function main() {
         capturedAt: new Date().toISOString(),
         screenshotPath,
         pageState: sanitizePageState(pageState),
-        logTail: tail.map(redactSensitiveText),
+        logTail: tail,
       }, null, 2));
       appendRunRecord({
         kind: reason,
@@ -335,12 +368,15 @@ async function main() {
     const stepName = String(latestStep || '');
     const configuredStepIdle = STEP_IDLE_TIMEOUTS_MS[stepName] || STEP_IDLE_TIMEOUT_MS || 0;
     const idleLimit = configuredStepIdle > 0 ? configuredStepIdle : IDLE_TIMEOUT_MS;
+    const hasActiveStep = Boolean(latestStep || latestEnsureStage);
     if (!idleLimit || idleLimit <= 0) return;
+    if (now - runStartedAt < WATCHDOG_MIN_STARTUP_MS) return;
     const idleForMs = now - lastProgressAt;
     const stepIdleForMs = now - latestStepStartedAt;
     const lastOutputWasSuccess = /"kind":"run-succeeded"|"kind":"run-failed"/.test(buffer)
       || tail.some((entry) => /"kind":"run-succeeded"|"kind":"run-failed"/.test(entry));
     if (lastOutputWasSuccess) return;
+    if (!hasActiveStep && idleForMs < IDLE_TIMEOUT_MS + WATCHDOG_GRACE_MS) return;
     if (idleForMs >= idleLimit + WATCHDOG_GRACE_MS && stepIdleForMs >= idleLimit + WATCHDOG_GRACE_MS) {
       finalizeTimeout('supervised-idle-timeout', idleLimit);
     }

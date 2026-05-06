@@ -47,6 +47,24 @@ test('extractUsablePageBlocksFromAriaSnapshot excludes search history buttons fr
   );
 });
 
+test('extractUsablePageBlocksFromAriaSnapshot excludes Sonos Radio result candidates', () => {
+  const surface = extractUsablePageBlocksFromAriaSnapshot({
+    url: 'https://play.sonos.com/zh-cn/search',
+    nodes: [
+      { ref: 'ax1', role: 'RootWebArea', name: 'Sonos', depth: 0 },
+      { ref: 'ax2', role: 'combobox', name: '', depth: 4 },
+      { ref: 'ax3', role: 'heading', name: 'Sonos Radio', depth: 5 },
+      { ref: 'ax4', role: 'button', name: '播放SmoothJazz Brasil Radio', depth: 6 },
+      { ref: 'ax5', role: 'StaticText', name: '播放列表', depth: 7 },
+      { ref: 'ax6', role: 'heading', name: 'QQ音乐', depth: 5 },
+      { ref: 'ax7', role: 'button', name: '播放舒缓爵士精选', depth: 6 },
+      { ref: 'ax8', role: 'StaticText', name: '播放列表', depth: 7 },
+    ],
+  });
+
+  assert.deepEqual(surface.usableBlocks.candidates.map((candidate) => candidate.title), ['舒缓爵士精选']);
+});
+
 test('shouldUseAriaSnapshotFallback recognizes unsupported Playwright evaluate failures', () => {
   assert.equal(
     shouldUseAriaSnapshotFallback({

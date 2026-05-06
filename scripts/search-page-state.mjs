@@ -316,13 +316,52 @@ function detectSearchPageStateInDom(options = {}) {
     resultsPresentReasons,
     resultsAbsentReasons,
     structuralSignals,
-    bodyPreview: bodyText.slice(0, 800),
+    bodyPreview: bodyText.slice(0, 240),
     visibleSearchBoxCount: searchInputs.length,
     activeElementRole: attrText(document.activeElement, 'role'),
     activeElementTag: document.activeElement?.tagName || '',
     activeElementValue: normalize(document.activeElement?.value || document.activeElement?.textContent || ''),
     nonSearchInteractiveCount: interactiveEntries.filter(({ el }) => !isNowPlaying(el) && !isSystem(el)).length,
   };
+}
+
+
+function detectSearchPageReadyInDom(options = {}) {
+  const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+  const attrText = (el, name) => String(el?.getAttribute?.(name) || '');
+  const expectedQuery = normalize(options?.query || options?.expectedQuery || '');
+  const url = location.href;
+  const searchInputs = [...document.querySelectorAll('input,textarea,[role="combobox"],[role="searchbox"]')]
+    .filter((el) => visible(el) && (
+      el.getAttribute('role') === 'combobox' ||
+      el.getAttribute('role') === 'searchbox' ||
+      el.type === 'search' ||
+      /搜索/.test(attrText(el, 'placeholder'))
+    ));
+  const searchInput = searchInputs[0] || null;
+  const searchValue = normalize(searchInput?.value || searchInput?.textContent || '');
+  const onSearchPage = url.includes('/search');
+  const searchPageReady = Boolean(onSearchPage && searchInput);
+  const queryApplied = expectedQuery ? searchValue.includes(expectedQuery) : Boolean(searchValue);
+  return {
+    pageKind: searchPageReady ? (queryApplied ? 'SEARCH_QUERY_VISIBLE' : 'SEARCH_READY') : (onSearchPage ? 'SEARCH_READY' : 'UNKNOWN'),
+    url,
+    title: document.title || '',
+    onSearchPage,
+    searchPageReady,
+    queryApplied,
+    searchValue,
+    visibleQueryInInput: queryApplied,
+    visibleSearchBoxCount: searchInputs.length,
+    activeElementRole: attrText(document.activeElement, 'role'),
+    activeElementTag: document.activeElement?.tagName || '',
+    activeElementValue: normalize(document.activeElement?.value || document.activeElement?.textContent || ''),
+  };
+}
+
+export function buildDetectSearchPageReadyFn(options = {}) {
+  return `() => (${detectSearchPageReadyInDom.toString()})(${JSON.stringify(options)})`;
 }
 
 export function buildDetectSearchPageStateFn(options = {}) {

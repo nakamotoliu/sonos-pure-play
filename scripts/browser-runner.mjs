@@ -52,7 +52,7 @@ import {
   ensureQueryGate as ensureQueryGateTool,
   replaceVisibleSearchValue as replaceVisibleSearchValueTool,
 } from './search-input-ops.mjs';
-import { buildDetectSearchPageStateFn } from './search-page-state.mjs';
+import { buildDetectSearchPageReadyFn, buildDetectSearchPageStateFn, classifySearchPageStateFromAriaSnapshot } from './search-page-state.mjs';
 import {
   clickLoginButton as clickLoginButtonTool,
   replaceVisibleLoginValue as replaceVisibleLoginValueTool,
@@ -968,15 +968,43 @@ export class PurePlayBrowserRunner {
   }
 
   readSearchPageState(targetId, query = '') {
-    const evaluated = this.evaluate(targetId, buildDetectSearchPageStateFn({ expectedQuery: query }));
-    return evaluated?.result || evaluated;
+    try {
+      const evaluated = this.evaluate(targetId, buildDetectSearchPageStateFn({ expectedQuery: query }));
+      return evaluated?.result || evaluated;
+    } catch (error) {
+      this.log({
+        event: 'search-state-dom-evaluate-failed-fallback-snapshot',
+        targetId,
+        query,
+        code: error?.code || null,
+        message: String(error?.message || error).slice(0, 500),
+      });
+      const snapshot = this.snapshot(targetId, 220);
+      return classifySearchPageStateFromAriaSnapshot(snapshot, { expectedQuery: query });
+    }
+  }
+
+  readSearchPageReadyState(targetId, query = '') {
+    try {
+      const evaluated = this.evaluate(targetId, buildDetectSearchPageReadyFn({ expectedQuery: query }));
+      return evaluated?.result || evaluated;
+    } catch (error) {
+      this.log({
+        event: 'search-ready-dom-evaluate-failed-fallback-full-state',
+        targetId,
+        query,
+        code: error?.code || null,
+        message: String(error?.message || error).slice(0, 500),
+      });
+      return this.readSearchPageState(targetId, query);
+    }
   }
 
   waitForSearchPageReady(targetId, query = '', { timeoutMs = 8000, intervalMs = 180 } = {}) {
     const startedAt = Date.now();
     let lastState = null;
     while (Date.now() - startedAt <= timeoutMs) {
-      lastState = this.readSearchPageState(targetId, query);
+      lastState = this.readSearchPageReadyState(targetId, query);
       if (lastState?.onSearchPage && lastState?.searchPageReady) return lastState;
       this.waitMs(intervalMs);
     }

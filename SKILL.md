@@ -108,6 +108,9 @@ The skill, not code, defines the business flow. Follow these steps in order and 
    - login is not blocking the flow
    - if login is blocking the flow, stop and report that the browser profile is not ready
 6. Use browser read/action tools to sync Sonos Web active output to the CLI-resolved room.
+   - Before this step, inspect discovered speaker count from CLI preflight.
+   - If CLI discovery/status confirms this deployment has exactly one reachable Sonos room and it is the CLI-resolved target room, skip browser room-sync read/click as redundant and continue to search.
+   - If there is more than one room, or discovery/status is uncertain, keep the full room-sync read/click verification.
 7. Use input tools from `scripts/search-input-ops.mjs` and action tools from `scripts/browser-action-tools.mjs` to:
    - call the browser-runner search helpers (`replaceVisibleSearchValue(...)`, `checkSearchQueryApplied(...)`, `ensureQueryGate(...)`) instead of raw browser fill/type commands
    - focus the search box
@@ -123,6 +126,7 @@ The skill, not code, defines the business flow. Follow these steps in order and 
    - menu actions
    - visible rows
 9. The agent selects which candidate to use based on those extracted blocks.
+   - Sonos Radio results must be excluded from the candidate list before ranking/selection because they are not playable through this workflow
    - default preference order is: playlist first, then album, then song, unless the request is explicitly a song/album/artist request
    - if any candidate has `recommended === true`, the agent must choose from that subset only
    - if no candidate has `recommended === true`, the agent must choose the candidate with the highest `finalScore`
@@ -148,6 +152,7 @@ The skill, not code, defines the business flow. Follow these steps in order and 
    - correct group state
    - playback state changed to `PLAYING` when expected
    - queue/title/track changed in a way consistent with the request
+   - compare all room statuses captured before/after playback; if any non-target room starts playing or its playback changes because of this run, immediately pause that non-target room and treat the run as `NON_TARGET_ROOM_PLAYBACK_LEAK` instead of success
    - if verification indicates a retryable playback failure such as copyright/transition/no content match, select a different result and retry
    - copyright-unavailable is a hard retry signal, not a final failure by itself:
      - examples include CLI status/queue text like `应版权方要求暂不能播放`, `暂不能播放`, `无法播放`, or obvious unavailable/copyright messages
@@ -233,18 +238,26 @@ The skill, not code, defines the business flow. Follow these steps in order and 
 
 ## Real validation gate
 - After meaningful playback-flow changes, do not treat unit tests as final validation.
-- Run a real supervised browser test against Sonos Web before claiming the change is validated.
-- Preferred command:
-  - `node skills/sonos-pure-play/scripts/test-live-playback.mjs <room> "<request>" ["<request2>" ...]`
-- Example:
-  - `node skills/sonos-pure-play/scripts/test-live-playback.mjs 客厅 "王菲热歌" "周杰伦热歌"`
-- This is the acceptance path because it requires:
-  - real Sonos Web page interaction
-  - real room sync
-  - real playback action execution
-  - final CLI playback verification
-- The script should be used as the default post-change smoke test for this skill.
-- If the real test was not run, say so explicitly; do not present unit-test results as final acceptance.
+- Split validation into three layers and say exactly which layer was run:
+  1. Unit tests: `node --test skills/sonos-pure-play/scripts/*.test.mjs`
+     - Uses mocked/fixture data only.
+     - Validates ranking, fallback, room-state inference, menu-label normalization, and CLI-verify rules.
+     - Does **not** prove the current Sonos Web page can be operated.
+  2. Live page tests: `node skills/sonos-pure-play/scripts/test-live-page-flow.mjs "<request>" [--room <room>]`
+     - Drives the real Sonos Web page.
+     - Verifies query gate, fresh results vs search history, candidate extraction/ranking, candidate click, detail page readiness, and real playback menu visibility.
+     - Safe by default: it does not click `替换队列` / `立即播放` unless `--execute-playback` is passed.
+  3. Live playback acceptance: `node skills/sonos-pure-play/scripts/test-live-playback.mjs <room> "<request>" ["<request2>" ...]`
+     - Drives the real Sonos Web page.
+     - Executes the playback action.
+     - Requires final Sonos CLI verification.
+- Examples:
+  - Safe live page test: `node skills/sonos-pure-play/scripts/test-live-page-flow.mjs "梁静茹热歌" --room 客厅`
+  - Mutating live page test: `node skills/sonos-pure-play/scripts/test-live-page-flow.mjs "梁静茹热歌" --room 客厅 --execute-playback`
+  - Full acceptance: `node skills/sonos-pure-play/scripts/test-live-playback.mjs 客厅 "王菲热歌" "周杰伦热歌"`
+- Page-operation logic must have live page coverage before it is called validated.
+- Final playback success must have live playback acceptance plus CLI truth.
+- If a real page or full playback test was not run, say so explicitly; do not present unit-test results as final acceptance.
 
 ## Skill layout
 - `scripts/browser-open-tools.mjs` = browser page-opening/focus tools

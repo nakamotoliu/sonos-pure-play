@@ -99,3 +99,35 @@ test('playlist mood requests always expose a fallback recommendation when result
   assert.equal(enriched.candidates[0].recommendedReason, 'fallback-playable-candidate');
   assert.ok(enriched.candidates[0].playLabel);
 });
+
+test('Sonos Radio results are removed before ranking or recommendation', () => {
+  const enriched = enrichUsablePageBlocks({
+    usableBlocks: {
+      candidates: [
+        {
+          title: 'SmoothJazz Brasil Radio',
+          playLabel: '播放SmoothJazz Brasil Radio',
+          scopeText: 'Sonos Radio 电台 SmoothJazz Brasil Radio',
+          sectionLabel: 'Sonos Radio',
+          canClick: true,
+        },
+        {
+          title: '舒缓爵士精选',
+          playLabel: '播放舒缓爵士精选',
+          scopeText: 'QQ音乐 播放列表 舒缓爵士精选',
+          canClick: true,
+        },
+      ],
+    },
+    originalIntent: 'Smooth Jazz',
+    query: 'Smooth Jazz',
+    requestKind: 'playlist',
+    strategy: 'playlist-first',
+    allowedTypes: ['playlist'],
+    playbackHistory: [],
+  });
+
+  assert.deepEqual(enriched.candidates.map((candidate) => candidate.title), ['舒缓爵士精选']);
+  assert.equal(enriched.selectionSummary.topRecommended.title, '舒缓爵士精选');
+  assert.equal(enriched.candidateRanking.excludedSonosRadioCandidates, 1);
+});

@@ -10,6 +10,19 @@ const TYPE_PATTERNS = {
   song: /(歌曲|单曲|track|song)/i,
 };
 
+const SONOS_RADIO_PATTERN = /\bsonos\s*radio\b|sonos\s*电台/i;
+
+export function isSonosRadioCandidate(candidate = {}) {
+  const haystack = normalizeWhitespace([
+    candidate.title,
+    candidate.playLabel,
+    candidate.scopeText,
+    candidate.sectionLabel,
+    candidate.service,
+  ].filter(Boolean).join(' '));
+  return SONOS_RADIO_PATTERN.test(haystack);
+}
+
 function inferCandidateType(candidate = {}) {
   const haystack = normalizeWhitespace([
     candidate.title,
@@ -146,7 +159,9 @@ export function enrichUsablePageBlocks({
 } = {}) {
   const history = Array.isArray(playbackHistory) ? playbackHistory : loadPlaybackHistory();
   const rawCandidates = Array.isArray(usableBlocks.candidates) ? usableBlocks.candidates : [];
-  const typedCandidates = rawCandidates.map((candidate) => ({
+  const playableCandidates = rawCandidates.filter((candidate) => !isSonosRadioCandidate(candidate));
+  const excludedSonosRadioCandidates = rawCandidates.length - playableCandidates.length;
+  const typedCandidates = playableCandidates.map((candidate) => ({
     ...candidate,
     type: inferCandidateType(candidate),
   }));
@@ -221,6 +236,7 @@ export function enrichUsablePageBlocks({
       selectedTitle: ranking.selected?.title || null,
       selectedType: ranking.selected?.type || null,
       totalCandidates: enrichedCandidates.length,
+      excludedSonosRadioCandidates,
     },
     selectionSummary: buildSelectionSummary(enrichedCandidates, ranking, strategy, requestKind),
   };

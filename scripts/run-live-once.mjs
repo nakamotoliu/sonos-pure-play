@@ -11,12 +11,15 @@ import {
   getGroupStatus,
   ensureSoloRoom,
   applyControlSteps,
+  collectRoomStatuses,
+  detectNonTargetPlaybackLeaks,
+  pauseRoom,
 } from './cli-control.mjs';
 import { analyzeIntent } from './intent.mjs';
 import { buildQueryPlan } from './query-planner.mjs';
 import { extractUsablePageBlocks, buildSelectionDecisionReport } from './browser-surface-tools.mjs';
 import { verifyMediaPlayback, MAX_PLAYBACK_ATTEMPTS } from './verify.mjs';
-import { SkillError } from './normalize.mjs';
+import { SkillError, normalizeText } from './normalize.mjs';
 import { ACTION_PRIORITY, DEFAULT_ACTION } from './selectors.mjs';
 import { notifyFailureArtifact, notifySuccessArtifact, saveSuccessScreenshot } from './failure-notify.mjs';
 import {
@@ -34,6 +37,41 @@ const QUERY_GATE_SETTLE_MS = Number(process.env.SONOS_QUERY_GATE_SETTLE_MS || 50
 const QUERY_GATE_RETRY_SETTLE_MS = Number(process.env.SONOS_QUERY_GATE_RETRY_SETTLE_MS || 350);
 const CANDIDATE_CLICK_POST_LOAD_WAIT_MS = Number(process.env.SONOS_CANDIDATE_CLICK_POST_LOAD_WAIT_MS || 250);
 const PLAYBACK_ACTION_WAIT_MS = Number(process.env.SONOS_PLAYBACK_ACTION_WAIT_MS || 200);
+
+function enforceNoNonTargetPlayback({ beforeStatuses, afterStatuses, room, request, selectedContent }) {
+  const leaks = detectNonTargetPlaybackLeaks({
+    before: beforeStatuses,
+    after: afterStatuses,
+    targetRoom: room,
+    request,
+    selectedContent,
+  });
+  if (!leaks.length) return { ok: true, leaks: [] };
+
+  const paused = [];
+  for (const leak of leaks) {
+    try {
+      paused.push({ room: leak.room, ok: true, status: pauseRoom(leak.room) });
+    } catch (error) {
+      paused.push({
+        room: leak.room,
+        ok: false,
+        error: {
+          phase: error?.phase || null,
+          code: error?.code || null,
+          message: String(error?.message || error),
+        },
+      });
+    }
+  }
+
+  throw new SkillError(
+    'post-verify',
+    'NON_TARGET_ROOM_PLAYBACK_LEAK',
+    `Playback action affected non-target room(s): ${leaks.map((leak) => leak.room).join(', ')}. Guard attempted to pause them.`,
+    { room, request, selectedContent, leaks, paused }
+  );
+}
 
 function ensureFreshSearchResults(runner, targetId, query, { settleMs = QUERY_GATE_SETTLE_MS, recoverySettleMs = NAVIGATE_SETTLE_MS } = {}) {
   const first = runner.ensureQueryGateVerified(targetId, query, { pageReloads: 0, inputAttempts: 1, settleMs }).actionResult;
@@ -63,18 +101,94 @@ function extractEvidence(error) {
   return error?.data?.evidence || null;
 }
 
+function finalCliTruthMatchesRequest({ status, queueJson, request, selectedContent }) {
+  const state = String(status?.state || '').toUpperCase();
+  if (state !== 'PLAYING') return false;
+  const haystack = normalizeText([
+    status?.title,
+    status?.artist,
+    status?.album,
+    JSON.stringify(queueJson || {}),
+  ].filter(Boolean).join(' '));
+  const requestKey = normalizeText(request || '');
+  const selectedKey = normalizeText(selectedContent || '');
+  return Boolean(
+    haystack && (
+      (selectedKey && haystack.includes(selectedKey)) ||
+      (requestKey && haystack.includes(requestKey))
+    )
+  );
+}
+
+function attemptFinalCliSuccessAfterFailure({ room, request, selectedContent }) {
+  try {
+    const status = getStatus(room);
+    const queueJson = getQueueJson(room, 20);
+    const matched = finalCliTruthMatchesRequest({ status, queueJson, request, selectedContent });
+    if (!matched) return { ok: false, status, queueJson };
+    return {
+      ok: true,
+      report: {
+        playbackVerifyResult: {
+          actionName: 'final-cli-guard',
+          playbackSuccess: true,
+          executionMatched: true,
+          matchedBy: 'final-cli-guard-after-error',
+          finalState: status?.state || null,
+          finalTitle: status?.title || null,
+          finalTrack: status?.track || null,
+        },
+      },
+      status,
+      queueJson,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        phase: error?.phase || null,
+        code: error?.code || null,
+        message: String(error?.message || error),
+      },
+    };
+  }
+}
+
 function emit(event) {
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...event }));
 }
 
 function fail(phase, error, extra = {}) {
   const evidence = extractEvidence(error);
+  const skipFinalCliGuard = error?.code === 'NON_TARGET_ROOM_PLAYBACK_LEAK';
+  const finalCliGuard = extra?.room && !skipFinalCliGuard
+    ? attemptFinalCliSuccessAfterFailure({
+        room: extra.room,
+        request: extra.request,
+        selectedContent: extra.selectedContent,
+      })
+    : null;
+  if (finalCliGuard?.ok) {
+    appendRunRecord({
+      kind: 'run-succeeded-final-cli-guard',
+      phase,
+      code: error?.code || null,
+      message: error?.message || String(error),
+      room: extra.room,
+      request: extra.request,
+      selectedContent: extra.selectedContent || null,
+      playbackVerifyResult: finalCliGuard.report.playbackVerifyResult,
+    });
+    console.log(JSON.stringify({ ok: true, finalCliGuard: true, report: finalCliGuard.report }));
+    process.exit(0);
+  }
   const payload = {
     ok: false,
     phase,
     code: error?.code || null,
     message: error?.message || String(error),
     data: error?.data || null,
+    finalCliGuard,
     ...extra,
   };
   appendRunRecord({
@@ -84,6 +198,7 @@ function fail(phase, error, extra = {}) {
     message: payload.message,
     evidence,
     extra,
+    finalCliGuard,
   });
   if (evidence?.artifactPath || evidence?.screenshotPath) {
     try {
@@ -140,7 +255,7 @@ function chooseCandidate(surface) {
   };
 }
 
-function clickCandidateAndReadDetail(runner, targetId, chosen, { timeoutMs = 9000, intervalMs = 180 } = {}) {
+export function clickCandidateAndReadDetail(runner, targetId, chosen, { timeoutMs = 9000, intervalMs = 180 } = {}) {
   const playLabel = chosen?.playLabel || '';
   if (!playLabel) throw new Error('chosen candidate has no playLabel');
   const result = runner.evaluate(
@@ -203,7 +318,7 @@ function clickCandidateAndReadDetail(runner, targetId, chosen, { timeoutMs = 900
   return clicked;
 }
 
-function waitForPlaybackSurfaceReady(runner, targetId, { timeoutMs = 10000, intervalMs = 180 } = {}) {
+export function waitForPlaybackSurfaceReady(runner, targetId, { timeoutMs = 10000, intervalMs = 180 } = {}) {
   const result = runner.evaluate(
     targetId,
     `async () => {
@@ -328,6 +443,8 @@ process.on('SIGINT', () => {
   process.exit(130);
 });
 
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+let lastSelectedContent = null;
 try {
   appendRunRecord({ kind: 'run-start', roomInput, request, maxPlaybackAttempts: MAX_PLAYBACK_ATTEMPTS });
   emit({ phase: 'start', roomInput, request });
@@ -352,7 +469,20 @@ try {
 
   const preStatus = getStatus(room);
   const preQueueJson = getQueueJson(room, 20);
+  const preAllRoomStatuses = collectRoomStatuses();
+  const singleSpeakerInstall = preAllRoomStatuses.length === 1 && preAllRoomStatuses[0]?.ok && preAllRoomStatuses[0]?.room === room;
   emit({ phase: 'preflight', preStatus, preQueueCount: preQueueJson?.items?.length || 0 });
+  emit({
+    phase: 'non-target-guard-before',
+    singleSpeakerInstall,
+    rooms: preAllRoomStatuses.map((entry) => ({
+      room: entry.room,
+      ok: entry.ok,
+      state: entry.status?.state || null,
+      title: entry.status?.title || null,
+      volume: entry.status?.volume || null,
+    })),
+  });
 
   const targetId = runner.runStep('ensure-sonos-tab', {
     action: () => runner.ensureSonosTab(),
@@ -367,49 +497,61 @@ try {
   }).actionResult;
   emit({ phase: 'browser', event: 'login-preflight-ok', targetId, state: loginPreflight?.state || null });
 
-  const roomSync = runner.runStep('room-sync-read-before', {
-    targetId,
-    context: { room },
-    action: () => runner.readRoomSyncState(targetId, room),
-    verify: (result) => {
-      if (result?.code === 'SONOS_WEB_PROFILE_LOGGED_OUT' || result?.code === 'LOGIN_CHALLENGE_REQUIRED' || result?.loginBlocked || result?.challengeRequired) {
-        throw new SkillError(
-          'preflight',
-          result?.code || 'SONOS_WEB_PROFILE_LOGGED_OUT',
-          result?.code === 'LOGIN_CHALLENGE_REQUIRED'
-            ? 'Sonos Web requires additional verification before playback can continue.'
-            : 'Sonos Web is logged out in the selected browser profile. Restore login for this profile before running playback.',
-          { profile: runner.profile, url: result?.url || null, result }
-        );
-      }
-      return {
-        ok: Boolean(result?.ok === false ? false : true),
-        result,
-        warning: result?.roomVisible || result?.roomCardFound ? null : 'room-not-visible-on-current-page',
-      };
-    },
-  }).actionResult;
-  emit({ phase: 'room-sync-before', roomSync });
-  let roomSyncAfter = roomSync;
-  if (!roomSync?.activeRoomConfirmed) {
-    const activate = runner.runStep('room-sync-activate', {
-      targetId,
-      context: { room },
-      action: () => runner.clickRoomActivate(targetId, room),
-      verify: (result) => ({ ok: Boolean(result?.ok), result }),
-    }).actionResult;
-    emit({ phase: 'room-sync-click', activate });
-    runner.waitMs(200);
-    roomSyncAfter = runner.runStep('room-sync-read-after', {
+let roomSyncAfter = null;
+  if (singleSpeakerInstall) {
+    roomSyncAfter = {
+      skipped: true,
+      reason: 'single-speaker-install',
+      targetRoom: room,
+      discoveredRooms: preAllRoomStatuses.map((entry) => entry.room),
+      activeRoomConfirmed: true,
+    };
+    emit({ phase: 'room-sync-skipped', roomSyncAfter });
+  } else {
+    const roomSync = runner.runStep('room-sync-read-before', {
       targetId,
       context: { room },
       action: () => runner.readRoomSyncState(targetId, room),
-      verify: (result) => ({ ok: Boolean(result?.activeRoomConfirmed), result }),
+      verify: (result) => {
+        if (result?.code === 'SONOS_WEB_PROFILE_LOGGED_OUT' || result?.code === 'LOGIN_CHALLENGE_REQUIRED' || result?.loginBlocked || result?.challengeRequired) {
+          throw new SkillError(
+            'preflight',
+            result?.code || 'SONOS_WEB_PROFILE_LOGGED_OUT',
+            result?.code === 'LOGIN_CHALLENGE_REQUIRED'
+              ? 'Sonos Web requires additional verification before playback can continue.'
+              : 'Sonos Web is logged out in the selected browser profile. Restore login for this profile before running playback.',
+            { profile: runner.profile, url: result?.url || null, result }
+          );
+        }
+        return {
+          ok: Boolean(result?.ok === false ? false : true),
+          result,
+          warning: result?.roomVisible || result?.roomCardFound ? null : 'room-not-visible-on-current-page',
+        };
+      },
     }).actionResult;
-  } else {
-    emit({ phase: 'room-sync-after-skipped', reason: 'already-active', room });
+    emit({ phase: 'room-sync-before', roomSync });
+    roomSyncAfter = roomSync;
+    if (!roomSync?.activeRoomConfirmed) {
+      const activate = runner.runStep('room-sync-activate', {
+        targetId,
+        context: { room },
+        action: () => runner.clickRoomActivate(targetId, room),
+        verify: (result) => ({ ok: Boolean(result?.ok), result }),
+      }).actionResult;
+      emit({ phase: 'room-sync-click', activate });
+      runner.waitMs(200);
+      roomSyncAfter = runner.runStep('room-sync-read-after', {
+        targetId,
+        context: { room },
+        action: () => runner.readRoomSyncState(targetId, room),
+        verify: (result) => ({ ok: Boolean(result?.activeRoomConfirmed), result }),
+      }).actionResult;
+    } else {
+      emit({ phase: 'room-sync-after-skipped', reason: 'already-active', room });
+    }
   }
-  emit({ phase: 'room-sync-after', roomSyncAfter });
+    emit({ phase: 'room-sync-after', roomSyncAfter });
 
   let finalResult = null;
   let lastError = null;
@@ -453,6 +595,7 @@ try {
       for (const chosenCandidate of selection.attemptPool) {
         const candidateSelection = buildSelectionFromChosen(surface, chosenCandidate);
         emit({ phase: 'candidate-attempt', query, chosenCandidate, decisionReason: candidateSelection.decisionReason });
+        lastSelectedContent = chosenCandidate?.title || lastSelectedContent;
 
         try {
           runner.runStep('candidate-click', {
@@ -502,6 +645,15 @@ try {
 
           const afterStatus = getStatus(room);
           const afterQueueJson = getQueueJson(room, 20);
+          const afterAllRoomStatuses = collectRoomStatuses();
+          const nonTargetGuard = enforceNoNonTargetPlayback({
+            beforeStatuses: preAllRoomStatuses,
+            afterStatuses: afterAllRoomStatuses,
+            room,
+            request,
+            selectedContent: chosenCandidate.title,
+          });
+          emit({ phase: 'non-target-guard-after', query, nonTargetGuard });
           const verified = verifyMediaPlayback({
             room,
             actionName: playbackAction.actualLabel,
@@ -597,7 +749,9 @@ try {
     });
   }
   console.log(JSON.stringify(successPayload));
+
 } catch (error) {
   closeRunnerForExit('browser-runner-closed-after-error');
-  fail('run-live-once', error, { room: roomInput, request });
+  fail('run-live-once', error, { room: roomInput, request, selectedContent: lastSelectedContent });
+}
 }
